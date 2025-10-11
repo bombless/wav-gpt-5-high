@@ -31,16 +31,14 @@ fn main() -> Result<(), Box<dyn Error>> {
     let (track, sampled_track, global_peak) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
     let fmax = sr_in / 2.0;
 
-    // 合成 44.1kHz 正弦
-    let sr_out = 44_100u32;
-    let synth = synth_sine_from_track(&track, sr_out, duration, 0.25);
-
     // 准备 App 状态
     let file_name = Path::new(wav_path)
         .file_name()
         .and_then(|s| s.to_str())
         .unwrap_or("input.wav")
         .to_string();
+
+    let sr_out = 44_100u32;
 
     let app = App::new(
         file_name,
@@ -59,8 +57,8 @@ fn main() -> Result<(), Box<dyn Error>> {
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
         global_peak.map(|(t, f, m)| (t as f64, f as f64, m)),
-        synth,
         sr_out,
+        duration as f64,
     );
 
     let native_options = eframe::NativeOptions {
@@ -288,6 +286,25 @@ fn synth_sine_from_track(
 
 // ========================== GUI 应用 ==========================
 
+#[derive(Debug, Clone, Copy, PartialEq)]
+enum PlaybackTrack {
+    Max,      // 最大值（红线）
+    Sample1,  // 采样1（紫线）
+    Sample2,  // 采样2（紫线）
+    Sample3,  // 采样3（紫线）
+}
+
+impl PlaybackTrack {
+    fn label(&self) -> &str {
+        match self {
+            PlaybackTrack::Max => "最大值（红线）",
+            PlaybackTrack::Sample1 => "采样频率 #1",
+            PlaybackTrack::Sample2 => "采样频率 #2",
+            PlaybackTrack::Sample3 => "采样频率 #3",
+        }
+    }
+}
+
 struct App {
     file_name: String,
     duration: f64,
@@ -305,7 +322,7 @@ struct App {
     freq_bounds: (f64, f64),
 
     // 音频播放
-    synth: Vec<f32>,
+    selected_track: PlaybackTrack,             // 选择播放的轨迹
     sr_out: u32,
     stream: Option<OutputStream>,
     handle: Option<OutputStreamHandle>,
@@ -324,8 +341,8 @@ impl App {
         sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
         global_peak: Option<(f64, f64, f32)>,
-        synth: Vec<f32>,
         sr_out: u32,
+        _total_duration: f64,
     ) -> Self {
         Self {
             file_name,
@@ -340,7 +357,7 @@ impl App {
             show_note_lines: true,
             show_sampled_freqs: true,
             dense_threshold: 36,
-            synth,
+            selected_track: PlaybackTrack::Max,
             sr_out,
             stream: None,
             handle: None,
@@ -351,32 +368,54 @@ impl App {
         }
     }
 
+    // 根据选择的轨迹生成播放数据
+    fn get_selected_track_data(&self) -> Vec<(f32, f32)> {
+        match self.selected_track {
+            PlaybackTrack::Max => {
+                self.track.iter().map(|p| (p[0] as f32, p[1] as f32)).collect()
+            }
+            PlaybackTrack::Sample1 => {
+                self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[0] as f32)).collect()
+            }
+            PlaybackTrack::Sample2 => {
+                self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[1] as f32)).collect()
+            }
+            PlaybackTrack::Sample3 => {
+                self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[2] as f32)).collect()
+            }
+        }
+    }
+
     fn start_play(&mut self) {
-        if self.synth.is_empty() || self.playing {
+        if self.playing {
             return;
         }
+
+        // 生成选定轨迹的音频
+        let track_data = self.get_selected_track_data();
+        let synth = synth_sine_from_track(&track_data, self.sr_out, self.duration as f32, 0.25);
+
+        if synth.is_empty() {
+            return;
+        }
+
         if self.stream.is_none() {
             if let Ok((stream, handle)) = OutputStream::try_default() {
                 self.handle = Some(handle);
                 self.stream = Some(stream);
             }
         }
-        if let (Some(handle), None) = (&self.handle, &self.sink) {
+
+        if let Some(handle) = &self.handle {
             if let Ok(sink) = Sink::try_new(handle) {
-                let buf = SamplesBuffer::new(1, self.sr_out, self.synth.clone());
+                let buf = SamplesBuffer::new(1, self.sr_out, synth);
                 sink.append(buf);
                 sink.set_volume(0.9);
+                sink.play();
                 self.sink = Some(sink);
                 self.playing = true;
                 self.play_start_time = Some(Instant::now());
                 self.play_position = 0.0;
-            }
-        }
-        if let Some(sink) = &self.sink {
-            sink.play();
-            self.playing = true;
-            if self.play_start_time.is_none() {
-                self.play_start_time = Some(Instant::now());
             }
         }
     }
@@ -470,19 +509,34 @@ impl App {
                     let points: Vec<[f64; 2]> = self.sampled_track.iter()
                         .map(|(t, freqs)| [*t, freqs[i]])
                         .collect();
+
+                    // 如果当前选择播放这条轨迹，加粗显示
+                    let (width, color) = match (i, self.selected_track) {
+                        (0, PlaybackTrack::Sample1) => (2.5, Color32::from_rgb(200, 100, 255)),
+                        (1, PlaybackTrack::Sample2) => (2.5, Color32::from_rgb(200, 100, 255)),
+                        (2, PlaybackTrack::Sample3) => (2.5, Color32::from_rgb(200, 100, 255)),
+                        _ => (1.5, Color32::from_rgb(147, 51, 234)),
+                    };
+
                     let line = Line::new(PlotPoints::from_iter(points))
                         .name(format!("采样频率 #{}", i + 1))
-                        .color(Color32::from_rgb(147, 51, 234)) // 紫色
-                        .width(1.5);
+                        .color(color)
+                        .width(width);
                     plot_ui.line(line);
                 }
             }
 
             // 主频轨迹（最大值，红色）
+            let (max_width, max_color) = if self.selected_track == PlaybackTrack::Max {
+                (3.0, Color32::from_rgb(255, 50, 80))
+            } else {
+                (2.0, Color32::from_rgb(220, 20, 60))
+            };
+
             let line = Line::new(PlotPoints::from_iter(self.track.iter().map(|p| [p[0], p[1]])))
                 .name("主频轨迹（最大值）")
-                .color(Color32::from_rgb(220, 20, 60)) // 红色
-                .width(2.0);
+                .color(max_color)
+                .width(max_width);
             plot_ui.line(line);
 
             // 全局峰值标记
@@ -551,6 +605,25 @@ impl eframe::App for App {
                 ui.separator();
                 ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
                 ui.separator();
+
+                // 播放轨迹选择
+                ui.label("播放轨迹:");
+                let prev_selection = self.selected_track;
+                egui::ComboBox::from_id_source("track_selector")
+                    .selected_text(self.selected_track.label())
+                    .show_ui(ui, |ui| {
+                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Max, PlaybackTrack::Max.label());
+                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample1, PlaybackTrack::Sample1.label());
+                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample2, PlaybackTrack::Sample2.label());
+                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample3, PlaybackTrack::Sample3.label());
+                    });
+
+                // 如果正在播放时切换了轨迹，停止当前播放
+                if self.playing && prev_selection != self.selected_track {
+                    self.stop_play();
+                }
+
+                ui.separator();
                 if ui.button(if self.playing { "停止播放" } else { "播放合成音" }).clicked() {
                     if self.playing {
                         self.stop_play();
@@ -558,9 +631,11 @@ impl eframe::App for App {
                         self.start_play();
                     }
                 }
+
                 if self.playing {
                     ui.separator();
-                    ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s", self.play_position, self.duration))
+                    ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s ({})",
+                                                   self.play_position, self.duration, self.selected_track.label()))
                         .color(Color32::from_rgb(0, 200, 0)));
                 }
                 ui.separator();
