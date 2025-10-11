@@ -432,9 +432,9 @@ impl App {
                 let (name, f_note) = nearest_note(pointer.y);
                 let txt = format!("最近音: {name} ≈ {:.1}Hz", f_note);
                 plot_ui.text(
-                    PlotText::new(PlotPoint {x: pointer.x, y: pointer.y}, txt)
-                        .anchor(Align2([Align::Min, Align::Center]))
-                        .color(Color32::from_rgb(50, 50, 50)),
+                    PlotText::new(PlotPoint {x: pointer.x + 0.2, y: pointer.y}, txt)
+                        .anchor(Align2([Align::Min, Align::Min]))
+                        .color(Color32::from_rgb(250, 50, 50)),
                 );
             }
         });
