@@ -1,9 +1,10 @@
 [package]
 name = "wav_dominant_freq"
-version = "0.1.0"
+version = "0.2.0"
 edition = "2024"
 
 [dependencies]
 hound = "3.5"
 rustfft = "6.1"
 plotters = "0.3"
+rodio = "0.17"
