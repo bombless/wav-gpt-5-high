@@ -359,7 +359,7 @@ impl App {
     fn draw_plot(&self, ui: &mut egui::Ui) {
         let plot = Plot::new("dominant_freq_plot")
             .legend(Legend::default())
-            .allow_scroll(true)
+            .allow_scroll(false)
             .allow_zoom(true)
             .allow_boxed_zoom(true)
             .allow_drag(true)
