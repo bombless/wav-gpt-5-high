@@ -28,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sr_in = sample_rate as f32;
     let duration = mono.len() as f32 / sr_in;
 
-    let (track, global_peak) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
+    let (track, sampled_track, global_peak) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
     let fmax = sr_in / 2.0;
 
     // 合成 44.1kHz 正弦
@@ -49,6 +49,10 @@ fn main() -> Result<(), Box<dyn Error>> {
         track
             .iter()
             .map(|(t, f)| [*t as f64, *f as f64])
+            .collect(),
+        sampled_track
+            .iter()
+            .map(|(t, freqs)| (*t as f64, [freqs[0] as f64, freqs[1] as f64, freqs[2] as f64]))
             .collect(),
         equal_temperament_marks(20.0, fmax as f32)
             .into_iter()
@@ -138,7 +142,7 @@ fn dominant_frequency_track(
     sr: f32,
     win_size: usize,
     hop_size: usize,
-) -> Result<(Vec<(f32, f32)>, Option<(f32, f32, f32)>), Box<dyn Error>> {
+) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>, Option<(f32, f32, f32)>), Box<dyn Error>> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(win_size);
     let hann: Vec<f32> = (0..win_size)
@@ -146,6 +150,7 @@ fn dominant_frequency_track(
         .collect();
 
     let mut track = Vec::<(f32, f32)>::new();
+    let mut sampled_track = Vec::<(f32, [f32; 3])>::new();
     let mut global_peak: Option<(f32, f32, f32)> = None;
 
     let nyquist = sr / 2.0;
@@ -162,29 +167,49 @@ fn dominant_frequency_track(
         fft.process(&mut buf);
 
         let half = win_size / 2;
-        let mut max_idx = 0usize;
-        let mut max_mag2 = 0.0f32;
-        for k in 0..half {
-            let c = buf[k];
-            let mag2 = c.re * c.re + c.im * c.im;
-            if mag2 > max_mag2 {
-                max_mag2 = mag2;
-                max_idx = k;
-            }
-        }
+
+        // 找出所有频率的幅度
+        let mut peaks: Vec<(usize, f32)> = (0..half)
+            .map(|k| {
+                let c = buf[k];
+                let mag2 = c.re * c.re + c.im * c.im;
+                (k, mag2)
+            })
+            .collect();
+
+        // 按幅度降序排序
+        peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
+
+        // 取前三个峰值
+        let top3_freqs: [f32; 3] = [
+            (peaks[0].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist),
+            if peaks.len() > 1 {
+                (peaks[1].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist)
+            } else {
+                0.0
+            },
+            if peaks.len() > 2 {
+                (peaks[2].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist)
+            } else {
+                0.0
+            },
+        ];
 
         let t = start as f32 / sr;
-        let f = (max_idx as f32 * sr / win_size as f32).clamp(0.0, nyquist);
-        track.push((t, f));
+        let f_max = top3_freqs[0]; // 最大值
+        let max_mag2 = peaks[0].1;
+
+        track.push((t, f_max));
+        sampled_track.push((t, top3_freqs));
 
         if max_mag2 > global_peak.map(|(_, _, m)| m).unwrap_or(-1.0) {
-            global_peak = Some((t, f, max_mag2));
+            global_peak = Some((t, f_max, max_mag2));
         }
 
         start += hop_size;
     }
 
-    Ok((track, global_peak))
+    Ok((track, sampled_track, global_peak))
 }
 
 // 生成 [fmin, fmax] 内的十二平均律标注（返回：频率、名、MIDI）
@@ -215,12 +240,7 @@ fn synth_sine_from_track(
         return vec![];
     }
 
-    // let mut t0 = track[0].0;
     let local_track = track.to_vec();
-    // if t0 > 0.0 {
-    //     local_track.insert(0, (0.0, track[0].1));
-    //     t0 = 0.0;
-    // }
 
     let n = (duration * sr_out as f32).round() as usize;
     let sr_out_f = sr_out as f32;
@@ -272,14 +292,16 @@ struct App {
     file_name: String,
     duration: f64,
     fmax: f64,
-    track: Vec<[f64; 2]>,                 // (t, f)
-    global_peak: Option<(f64, f64, f32)>, // (t, f, mag2)
-    note_marks: Vec<(f64, String, i32)>,  // (freq, name, midi)
+    track: Vec<[f64; 2]>,                      // (t, f_max) - 最大值轨迹
+    sampled_track: Vec<(f64, [f64; 3])>,      // (t, [f1, f2, f3]) - 三个采样频率
+    global_peak: Option<(f64, f64, f32)>,      // (t, f, mag2)
+    note_marks: Vec<(f64, String, i32)>,       // (freq, name, midi)
 
     // 交互选项
     show_note_lines: bool,
-    dense_threshold: usize, // > 阈值时仅标 Cn/A4/中央C
-    time_bounds: (f64, f64), // 初始视图
+    show_sampled_freqs: bool,                  // 是否显示三个采样频率
+    dense_threshold: usize,
+    time_bounds: (f64, f64),
     freq_bounds: (f64, f64),
 
     // 音频播放
@@ -289,8 +311,8 @@ struct App {
     handle: Option<OutputStreamHandle>,
     sink: Option<Sink>,
     playing: bool,
-    play_start_time: Option<Instant>,  // 播放开始时间
-    play_position: f64,                // 当前播放位置（秒）
+    play_start_time: Option<Instant>,
+    play_position: f64,
 }
 
 impl App {
@@ -299,6 +321,7 @@ impl App {
         duration: f64,
         fmax: f64,
         track: Vec<[f64; 2]>,
+        sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
         global_peak: Option<(f64, f64, f32)>,
         synth: Vec<f32>,
@@ -311,9 +334,11 @@ impl App {
             time_bounds: (0.0, duration.max(1e-6)),
             freq_bounds: (0.0, fmax.max(1.0)),
             track,
+            sampled_track,
             global_peak,
             note_marks,
             show_note_lines: true,
+            show_sampled_freqs: true,
             dense_threshold: 36,
             synth,
             sr_out,
@@ -372,7 +397,6 @@ impl App {
                 let elapsed = start_time.elapsed().as_secs_f64();
                 self.play_position = elapsed.min(self.duration);
 
-                // 检查是否播放完成
                 if let Some(sink) = &self.sink {
                     if sink.empty() {
                         self.playing = false;
@@ -420,7 +444,6 @@ impl App {
 
                     let mut line = HLine::new(*f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
                     if is_c4 {
-                        // 中央 C 更显眼
                         line = HLine::new(*f).color(Color32::from_rgb(25, 130, 196));
                     }
                     plot_ui.hline(line);
@@ -434,17 +457,32 @@ impl App {
                         plot_ui.text(
                             PlotText::new(PlotPoint {x: label_x, y: *f }, label)
                                 .color(Color32::from_rgb(70, 70, 110))
-                                .anchor(Align2([Align::Min, Align::Center])) // 左对齐，垂直居中
+                                .anchor(Align2([Align::Min, Align::Center]))
                                 .name("notes"),
                         );
                     }
                 }
             }
 
-            // 主频轨迹
+            // 绘制三个采样频率（紫色）
+            if self.show_sampled_freqs {
+                for i in 0..3 {
+                    let points: Vec<[f64; 2]> = self.sampled_track.iter()
+                        .map(|(t, freqs)| [*t, freqs[i]])
+                        .collect();
+                    let line = Line::new(PlotPoints::from_iter(points))
+                        .name(format!("采样频率 #{}", i + 1))
+                        .color(Color32::from_rgb(147, 51, 234)) // 紫色
+                        .width(1.5);
+                    plot_ui.line(line);
+                }
+            }
+
+            // 主频轨迹（最大值，红色）
             let line = Line::new(PlotPoints::from_iter(self.track.iter().map(|p| [p[0], p[1]])))
-                .name("主频轨迹")
-                .color(Color32::from_rgb(220, 20, 60));
+                .name("主频轨迹（最大值）")
+                .color(Color32::from_rgb(220, 20, 60)) // 红色
+                .width(2.0);
             plot_ui.line(line);
 
             // 全局峰值标记
@@ -464,7 +502,7 @@ impl App {
                 plot_ui.vline(play_line);
             }
 
-            // 鼠标坐标提示（光标位置 -> 最近音名）
+            // 鼠标坐标提示
             if let Some(pointer) = plot_ui.pointer_coordinate() {
                 let (name, f_note) = nearest_note(pointer.y);
                 let txt = format!("最近音: {name} ≈ {:.1}Hz", f_note);
@@ -495,10 +533,8 @@ fn nearest_note(freq: f64) -> (String, f64) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
-        // 更新播放位置
         self.update_play_position();
 
-        // 如果正在播放，请求重绘以更新播放位置显示
         if self.playing {
             ctx.request_repaint();
         }
@@ -512,6 +548,8 @@ impl eframe::App for App {
                 ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
                 ui.separator();
                 ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
+                ui.separator();
+                ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
                 ui.separator();
                 if ui.button(if self.playing { "停止播放" } else { "播放合成音" }).clicked() {
                     if self.playing {
