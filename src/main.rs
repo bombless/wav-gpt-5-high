@@ -1,11 +1,11 @@
 use eframe::egui;
-use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Text as PlotText};
+use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Text as PlotText, VLine};
 use ecolor::Color32;
 use egui::RichText;
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
-use std::{env, error::Error, f32::consts::PI, path::Path};
+use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use eframe::egui::Align;
 use eframe::emath::{Align2, Vec2b};
 use egui_chinese_font::setup_chinese_fonts;
@@ -289,6 +289,8 @@ struct App {
     handle: Option<OutputStreamHandle>,
     sink: Option<Sink>,
     playing: bool,
+    play_start_time: Option<Instant>,  // 播放开始时间
+    play_position: f64,                // 当前播放位置（秒）
 }
 
 impl App {
@@ -319,6 +321,8 @@ impl App {
             handle: None,
             sink: None,
             playing: false,
+            play_start_time: None,
+            play_position: 0.0,
         }
     }
 
@@ -339,11 +343,16 @@ impl App {
                 sink.set_volume(0.9);
                 self.sink = Some(sink);
                 self.playing = true;
+                self.play_start_time = Some(Instant::now());
+                self.play_position = 0.0;
             }
         }
         if let Some(sink) = &self.sink {
             sink.play();
             self.playing = true;
+            if self.play_start_time.is_none() {
+                self.play_start_time = Some(Instant::now());
+            }
         }
     }
 
@@ -353,7 +362,26 @@ impl App {
         }
         self.sink = None;
         self.playing = false;
-        // 不释放 stream/handle，避免反复创建；如需释放可同时置 None
+        self.play_start_time = None;
+        self.play_position = 0.0;
+    }
+
+    fn update_play_position(&mut self) {
+        if self.playing {
+            if let Some(start_time) = self.play_start_time {
+                let elapsed = start_time.elapsed().as_secs_f64();
+                self.play_position = elapsed.min(self.duration);
+
+                // 检查是否播放完成
+                if let Some(sink) = &self.sink {
+                    if sink.empty() {
+                        self.playing = false;
+                        self.play_start_time = None;
+                        self.play_position = 0.0;
+                    }
+                }
+            }
+        }
     }
 
     fn draw_plot(&self, ui: &mut egui::Ui) {
@@ -427,6 +455,15 @@ impl App {
                 plot_ui.line(peak_line);
             }
 
+            // 播放位置竖线
+            if self.playing && self.play_position > 0.0 {
+                let play_line = VLine::new(self.play_position)
+                    .name(format!("播放位置: {:.2}s", self.play_position))
+                    .color(Color32::from_rgba_unmultiplied(0, 255, 0, 200))
+                    .width(2.0);
+                plot_ui.vline(play_line);
+            }
+
             // 鼠标坐标提示（光标位置 -> 最近音名）
             if let Some(pointer) = plot_ui.pointer_coordinate() {
                 let (name, f_note) = nearest_note(pointer.y);
@@ -458,6 +495,14 @@ fn nearest_note(freq: f64) -> (String, f64) {
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        // 更新播放位置
+        self.update_play_position();
+
+        // 如果正在播放，请求重绘以更新播放位置显示
+        if self.playing {
+            ctx.request_repaint();
+        }
+
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
                 ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
@@ -475,6 +520,12 @@ impl eframe::App for App {
                         self.start_play();
                     }
                 }
+                if self.playing {
+                    ui.separator();
+                    ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s", self.play_position, self.duration))
+                        .color(Color32::from_rgb(0, 200, 0)));
+                }
+                ui.separator();
                 if ui.button("复位视图").clicked() {
                     self.time_bounds = (0.0, self.duration.max(1e-6));
                     self.freq_bounds = (0.0, self.fmax.max(1.0));
