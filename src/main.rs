@@ -321,6 +321,11 @@ struct App {
     time_bounds: (f64, f64),
     freq_bounds: (f64, f64),
 
+    // 节拍功能
+    bpm: f64,                                  // 每分钟节拍数
+    show_beat_lines: bool,                     // 是否显示节拍线
+    beats_per_bar: usize,                      // 每小节拍数（用于强调小节线）
+
     // 音频播放
     selected_track: PlaybackTrack,             // 选择播放的轨迹
     sr_out: u32,
@@ -357,6 +362,9 @@ impl App {
             show_note_lines: true,
             show_sampled_freqs: true,
             dense_threshold: 36,
+            bpm: 120.0,                        // 默认 120 BPM
+            show_beat_lines: true,             // 默认显示节拍线
+            beats_per_bar: 4,                  // 默认 4/4 拍
             selected_track: PlaybackTrack::Max,
             sr_out,
             stream: None,
@@ -468,6 +476,58 @@ impl App {
             });
 
         plot.show(ui, |plot_ui| {
+            // 节拍线（蓝色竖线）
+            if self.show_beat_lines && self.bpm > 0.0 {
+                let beat_duration = 60.0 / self.bpm;  // 每拍的时长（秒）
+                let bounds = plot_ui.plot_bounds();
+                let y_span = bounds.max()[1] - bounds.min()[1];
+                let label_y = bounds.min()[1] + 0.95 * y_span;  // 标签位置在顶部
+
+                // 计算需要显示的节拍范围
+                let start_beat = (bounds.min()[0] / beat_duration).floor() as i32;
+                let end_beat = (bounds.max()[0] / beat_duration).ceil() as i32;
+
+                for beat_num in start_beat..=end_beat {
+                    if beat_num < 0 {
+                        continue;
+                    }
+
+                    let beat_time = beat_num as f64 * beat_duration;
+
+                    // 跳过超出音频时长的节拍
+                    if beat_time > self.duration {
+                        break;
+                    }
+
+                    // 判断是否为小节的第一拍（强拍）
+                    let is_bar_start = beat_num as usize % self.beats_per_bar == 0;
+
+                    // 强拍用更粗更深的蓝线，弱拍用细一点的浅蓝线
+                    let (color, width) = if is_bar_start {
+                        (Color32::from_rgb(0, 100, 200), 2.0)  // 深蓝色，粗线
+                    } else {
+                        (Color32::from_rgba_unmultiplied(100, 150, 255, 150), 1.0)  // 浅蓝色，细线
+                    };
+
+                    let beat_line = VLine::new(beat_time)
+                        .color(color)
+                        .width(width);
+                    plot_ui.vline(beat_line);
+
+                    // 只在小节的第一拍显示小节编号
+                    if is_bar_start {
+                        let bar_num = beat_num as usize / self.beats_per_bar + 1;
+                        let label = format!("小节 {}", bar_num);
+                        plot_ui.text(
+                            PlotText::new(PlotPoint { x: beat_time, y: label_y }, label)
+                                .color(Color32::from_rgb(0, 100, 200))
+                                .anchor(Align2([Align::Center, Align::Max]))
+                                .name("beats"),
+                        );
+                    }
+                }
+            }
+
             // 十二平均律水平线
             if self.show_note_lines {
                 let dense = self.note_marks.len() > self.dense_threshold;
@@ -604,6 +664,28 @@ impl eframe::App for App {
                 ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
                 ui.separator();
                 ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
+                ui.separator();
+
+                // 节拍控制
+                ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
+                if self.show_beat_lines {
+                    ui.separator();
+                    ui.label("BPM:");
+                    ui.add(egui::DragValue::new(&mut self.bpm)
+                        .speed(1.0)
+                        .clamp_range(30.0..=300.0));
+
+                    ui.separator();
+                    ui.label("拍号:");
+                    egui::ComboBox::from_id_source("beats_per_bar")
+                        .selected_text(format!("{}/4", self.beats_per_bar))
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.beats_per_bar, 3, "3/4");
+                            ui.selectable_value(&mut self.beats_per_bar, 4, "4/4");
+                            ui.selectable_value(&mut self.beats_per_bar, 5, "5/4");
+                            ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
+                        });
+                }
                 ui.separator();
 
                 // 播放轨迹选择
