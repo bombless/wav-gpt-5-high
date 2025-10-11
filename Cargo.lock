@@ -1381,10 +1381,11 @@ dependencies = [
 
 [[package]]
 name = "wav_dominant_freq"
-version = "0.2.0"
+version = "0.3.0"
 dependencies = [
  "hound",
  "plotters",
+ "plotters-svg",
  "rodio",
  "rustfft",
 ]

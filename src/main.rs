@@ -4,11 +4,11 @@ use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path};
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // 命令行参数：wav_path [win_size] [hop_size] [out_png]
+    // 命令行参数：wav_path [win_size] [hop_size] [out_svg]
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "用法: {} <input.wav> [win_size=2048] [hop_size=512] [out=dominant_freq.png]",
+            "用法: {} <input.wav> [win_size=2048] [hop_size=512] [out=dominant_freq.svg]",
             args.get(0).map(|s| s.as_str()).unwrap_or("prog")
         );
         std::process::exit(1);
@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let out_path = args
         .get(4)
         .cloned()
-        .unwrap_or_else(|| "dominant_freq.png".to_string());
+        .unwrap_or_else(|| "dominant_freq.svg".to_string());
 
     // 读取 WAV 并混合为单声道 f32
     let (mono, sample_rate) = read_wav_mono_f32(wav_path)?;
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    // 绘图：时间-频率折线，标注全局最大峰 + 十二平均律标线
+    // 绘图（SVG）：时间-频率折线，叠加十二平均律标注
     draw_track_plot(
         &track,
         global_peak,
@@ -56,7 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .and_then(|s| s.to_str())
             .unwrap_or("input.wav"),
     )?;
-    println!("输出图片: {}", out_path);
+    println!("输出 SVG: {}", out_path);
 
     // 以 44_100 Hz 合成跟随主频的正弦波，并播放
     let sr_out: u32 = 44_100;
@@ -191,7 +191,8 @@ fn draw_track_plot(
     out_path: &str,
     title_name: &str,
 ) -> Result<(), Box<dyn Error>> {
-    let root = BitMapBackend::new(out_path, (1280, 720)).into_drawing_area();
+    // 改为 SVG 矢量输出
+    let root = SVGBackend::new(out_path, (1280, 720)).into_drawing_area();
     root.fill(&WHITE)?;
 
     let mut chart = ChartBuilder::on(&root)
@@ -212,20 +213,20 @@ fn draw_track_plot(
         .y_label_formatter(&|v| format!("{:.0}", v))
         .draw()?;
 
-    // 叠加十二平均律标线
+    // 叠加十二平均律标线与标注
     let note_marks = equal_temperament_marks(20.0, fmax);
     let dense = note_marks.len() > 36; // 过密则只标注 Cn、A4、中央C
     let note_line_style = ShapeStyle::from(&RGBColor(120, 140, 200).mix(0.30)).stroke_width(1);
     let label_color = RGBColor(70, 70, 110);
 
     for (f, name, midi) in &note_marks {
-        // 画水平线
+        // 水平线
         chart.draw_series(std::iter::once(PathElement::new(
             vec![(0.0f32, *f), (tmax.max(1e-6), *f)],
             note_line_style.clone(),
         )))?;
 
-        // 决定是否标注文字
+        // 是否标注文字
         let is_c = (*midi % 12) == 0;
         let is_a4 = *midi == 69;
         let is_c4 = *midi == 60;
@@ -233,11 +234,10 @@ fn draw_track_plot(
 
         if show_label {
             let label = if is_c4 {
-                format!("{} (中央C) {:.1}Hz", name, f)
+                format!("{} (中央C) {:.1}Hz", name, *f)
             } else {
-                format!("{} {:.1}Hz", name, f)
+                format!("{} {:.1}Hz", name, *f)
             };
-            // 把文字放在左边靠内一点，避免挡住坐标轴
             let x_for_label = (tmax * 0.01).max(0.0);
             chart.draw_series(std::iter::once(Text::new(
                 label,
@@ -247,11 +247,12 @@ fn draw_track_plot(
         }
     }
 
-    // 折线：主频 vs 时间
-    chart.draw_series(LineSeries::new(
-        track.iter().cloned(),
-        &RGBColor(220, 20, 60), // crimson
-    ))?
+    // 主频轨迹
+    chart
+        .draw_series(LineSeries::new(
+            track.iter().cloned(),
+            &RGBColor(220, 20, 60),
+        ))?
         .label("主频")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RGBColor(220, 20, 60)));
 
@@ -307,6 +308,7 @@ fn synth_sine_from_track(
         return vec![];
     }
 
+    // 若轨迹时间不从 0 开始，补一个起点
     let mut t0 = track[0].0;
     let mut local_track = track.to_vec();
     if t0 > 0.0 {
@@ -324,9 +326,12 @@ fn synth_sine_from_track(
 
     for i in 0..n {
         let t = i as f32 / sr_out_f;
+
         while k + 1 < local_track.len() && t > local_track[k + 1].0 {
             k += 1;
         }
+
+        // 线性插值频率
         let f_inst = if k + 1 < local_track.len() {
             let (t0, f0) = local_track[k];
             let (t1, f1) = local_track[k + 1];
@@ -345,7 +350,7 @@ fn synth_sine_from_track(
         y.push(amp * phase.sin());
     }
 
-    // 简单淡入淡出，避免头尾点击（各 20ms）
+    // 淡入淡出 20ms
     let fade = (0.02 * sr_out_f) as usize;
     for i in 0..fade.min(y.len()) {
         let g = i as f32 / fade as f32;
