@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         );
     }
 
-    // 绘图：时间-频率折线，标注全局最大峰
+    // 绘图：时间-频率折线，标注全局最大峰 + 十二平均律标线
     draw_track_plot(
         &track,
         global_peak,
@@ -201,24 +201,61 @@ fn draw_track_plot(
         )
         .margin(10)
         .x_label_area_size(40)
-        .y_label_area_size(60)
+        .y_label_area_size(70)
         .build_cartesian_2d(0f32..tmax.max(1e-6), 0f32..fmax.max(1.0))?;
 
     chart
         .configure_mesh()
         .x_desc("时间 (秒)")
         .y_desc("频率 (Hz)")
-        .light_line_style(&RGBColor(220, 220, 220))
+        .light_line_style(&RGBColor(230, 230, 230))
+        .y_label_formatter(&|v| format!("{:.0}", v))
         .draw()?;
 
-    chart
-        .draw_series(LineSeries::new(
-            track.iter().cloned(),
-            &RGBColor(220, 20, 60),
-        ))?
+    // 叠加十二平均律标线
+    let note_marks = equal_temperament_marks(20.0, fmax);
+    let dense = note_marks.len() > 36; // 过密则只标注 Cn、A4、中央C
+    let note_line_style = ShapeStyle::from(&RGBColor(120, 140, 200).mix(0.30)).stroke_width(1);
+    let label_color = RGBColor(70, 70, 110);
+
+    for (f, name, midi) in &note_marks {
+        // 画水平线
+        chart.draw_series(std::iter::once(PathElement::new(
+            vec![(0.0f32, *f), (tmax.max(1e-6), *f)],
+            note_line_style.clone(),
+        )))?;
+
+        // 决定是否标注文字
+        let is_c = (*midi % 12) == 0;
+        let is_a4 = *midi == 69;
+        let is_c4 = *midi == 60;
+        let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
+
+        if show_label {
+            let label = if is_c4 {
+                format!("{} (中央C) {:.1}Hz", name, f)
+            } else {
+                format!("{} {:.1}Hz", name, f)
+            };
+            // 把文字放在左边靠内一点，避免挡住坐标轴
+            let x_for_label = (tmax * 0.01).max(0.0);
+            chart.draw_series(std::iter::once(Text::new(
+                label,
+                (x_for_label, *f),
+                ("sans-serif", 12).into_font().color(&label_color),
+            )))?;
+        }
+    }
+
+    // 折线：主频 vs 时间
+    chart.draw_series(LineSeries::new(
+        track.iter().cloned(),
+        &RGBColor(220, 20, 60), // crimson
+    ))?
         .label("主频")
         .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RGBColor(220, 20, 60)));
 
+    // 标注全局最大峰
     if let Some((t_peak, f_peak, _)) = global_peak {
         chart.draw_series(std::iter::once(Circle::new(
             (t_peak, f_peak),
@@ -242,6 +279,22 @@ fn draw_track_plot(
     Ok(())
 }
 
+// 生成 [fmin, fmax] 内的十二平均律标注（返回：频率、名、MIDI）
+fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
+    let names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+    let mut v = Vec::new();
+    for midi in 0..=127 {
+        let f = 440.0 * 2f32.powf((midi as f32 - 69.0) / 12.0);
+        if f >= fmin && f <= fmax {
+            let pc = (midi % 12) as usize;
+            let octave = (midi / 12) - 1; // MIDI 60 -> C4
+            let name = format!("{}{}", names[pc], octave);
+            v.push((f, name, midi));
+        }
+    }
+    v
+}
+
 // === 合成与播放 ===
 
 fn synth_sine_from_track(
@@ -254,11 +307,9 @@ fn synth_sine_from_track(
         return vec![];
     }
 
-    // 若轨迹时间不从 0 开始，这里假设从 0 补齐
     let mut t0 = track[0].0;
     let mut local_track = track.to_vec();
     if t0 > 0.0 {
-        // 在起点补上一点
         local_track.insert(0, (0.0, track[0].1));
         t0 = 0.0;
     }
@@ -273,13 +324,9 @@ fn synth_sine_from_track(
 
     for i in 0..n {
         let t = i as f32 / sr_out_f;
-
-        // 移动段索引，使 t 位于 [t_k, t_{k+1}] 或最后一段
         while k + 1 < local_track.len() && t > local_track[k + 1].0 {
             k += 1;
         }
-
-        // 线性插值频率，确保频率随时间平滑变化
         let f_inst = if k + 1 < local_track.len() {
             let (t0, f0) = local_track[k];
             let (t1, f1) = local_track[k + 1];
@@ -292,14 +339,13 @@ fn synth_sine_from_track(
         } else {
             local_track.last().map(|(_, f)| *f).unwrap_or(0.0)
         }
-            .clamp(0.0, nyq_out); // 防止超出输出奈奎斯特导致混叠
+            .clamp(0.0, nyq_out);
 
-        // 相位积分（保持相位连续，避免点击）
         phase += 2.0 * PI * f_inst / sr_out_f;
         y.push(amp * phase.sin());
     }
 
-    // 简单淡入淡出，避免头尾的小点击（各 20ms）
+    // 简单淡入淡出，避免头尾点击（各 20ms）
     let fade = (0.02 * sr_out_f) as usize;
     for i in 0..fade.min(y.len()) {
         let g = i as f32 / fade as f32;
@@ -313,13 +359,11 @@ fn synth_sine_from_track(
 
 fn play_audio_blocking(samples: &[f32], sample_rate: u32) -> Result<(), Box<dyn Error>> {
     use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
-
     let (_stream, handle) = OutputStream::try_default()?;
     let sink = Sink::try_new(&handle)?;
-    // 单声道播放；如果需要立体声，可复制到两个声道
     let buf = SamplesBuffer::new(1, sample_rate, samples.to_vec());
     sink.append(buf);
     sink.set_volume(0.9);
-    sink.sleep_until_end(); // 阻塞直到播放完毕
+    sink.sleep_until_end();
     Ok(())
 }
