@@ -1,14 +1,21 @@
+use eframe::egui;
+use egui_plot::{HLine, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, Text as PlotText};
+use ecolor::Color32;
+use egui::RichText;
 use hound::{SampleFormat, WavReader};
-use plotters::prelude::*;
+use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path};
+use eframe::egui::Align;
+use eframe::emath::Align2;
+use egui_chinese_font::setup_chinese_fonts;
 
 fn main() -> Result<(), Box<dyn Error>> {
-    // 命令行参数：wav_path [win_size] [hop_size] [out_svg]
+    // 命令行参数：wav_path [win_size] [hop_size]
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "用法: {} <input.wav> [win_size=2048] [hop_size=512] [out=dominant_freq.svg]",
+            "用法: {} <input.wav> [win_size=2048] [hop_size=512]",
             args.get(0).map(|s| s.as_str()).unwrap_or("prog")
         );
         std::process::exit(1);
@@ -16,62 +23,62 @@ fn main() -> Result<(), Box<dyn Error>> {
     let wav_path = &args[1];
     let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2048);
     let hop_size: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(512);
-    let out_path = args
-        .get(4)
-        .cloned()
-        .unwrap_or_else(|| "dominant_freq.svg".to_string());
 
-    // 读取 WAV 并混合为单声道 f32
     let (mono, sample_rate) = read_wav_mono_f32(wav_path)?;
     let sr_in = sample_rate as f32;
     let duration = mono.len() as f32 / sr_in;
 
-    if win_size < 8 || hop_size == 0 || hop_size > win_size {
-        return Err("win_size 必须 >= 8，且 0 < hop_size <= win_size".into());
-    }
-
-    // 计算主频轨迹
     let (track, global_peak) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
+    let fmax = sr_in / 2.0;
 
-    println!(
-        "总时长: {:.3}s, 输入采样率: {} Hz, 窗口/步长: {}/{}",
-        duration, sample_rate, win_size, hop_size
+    // 合成 44.1kHz 正弦
+    let sr_out = 44_100u32;
+    let synth = synth_sine_from_track(&track, sr_out, duration, 0.25);
+
+    // 准备 App 状态
+    let file_name = Path::new(wav_path)
+        .file_name()
+        .and_then(|s| s.to_str())
+        .unwrap_or("input.wav")
+        .to_string();
+
+    let app = App::new(
+        file_name,
+        duration as f64,
+        fmax as f64,
+        track
+            .iter()
+            .map(|(t, f)| [*t as f64, *f as f64])
+            .collect(),
+        equal_temperament_marks(20.0, fmax as f32)
+            .into_iter()
+            .map(|(f, name, midi)| (f as f64, name, midi))
+            .collect(),
+        global_peak.map(|(t, f, m)| (t as f64, f as f64, m)),
+        synth,
+        sr_out,
     );
-    if let Some((t_peak, f_peak, mag)) = global_peak {
-        println!(
-            "全局最大峰值 -> 时间: {:.3}s, 频率: {:.1} Hz, 幅度(平方): {:.3}",
-            t_peak, f_peak, mag
-        );
-    }
 
-    // 绘图（SVG）：时间-频率折线，叠加十二平均律标注
-    draw_track_plot(
-        &track,
-        global_peak,
-        sr_in / 2.0,
-        duration,
-        &out_path,
-        Path::new(wav_path)
-            .file_name()
-            .and_then(|s| s.to_str())
-            .unwrap_or("input.wav"),
+    let native_options = eframe::NativeOptions {
+        viewport: egui::ViewportBuilder::default()
+            .with_inner_size([1280.0, 800.0])
+            .with_title("主频轨迹浏览器（支持滚轮缩放/平移）"),
+        ..Default::default()
+    };
+
+    eframe::run_native(
+        "主频轨迹浏览器",
+        native_options,
+        Box::new(|cc| {
+            setup_chinese_fonts(&cc.egui_ctx).expect("Failed to load Chinese fonts");
+            Box::new(app)
+        }),
     )?;
-    println!("输出 SVG: {}", out_path);
 
-    // 以 44_100 Hz 合成跟随主频的正弦波，并播放
-    let sr_out: u32 = 44_100;
-    let amp = 0.25; // 合成音量，避免削波
-    let synth = synth_sine_from_track(&track, sr_out, duration, amp);
-
-    if synth.is_empty() {
-        eprintln!("没有生成可播放的合成数据（主频轨迹为空）。");
-        return Ok(());
-    }
-
-    play_audio_blocking(&synth, sr_out)?;
-    println!("播放完成。");
     Ok(())
 }
+
+// ========================== 数据处理 ==========================
 
 fn read_wav_mono_f32(path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
     let mut reader = WavReader::open(path)?;
@@ -82,17 +89,13 @@ fn read_wav_mono_f32(path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
     let mono: Vec<f32> = match (spec.sample_format, spec.bits_per_sample) {
         (SampleFormat::Int, 16) => {
             let samples: Result<Vec<i16>, _> = reader.samples::<i16>().collect();
-            let samples = samples?;
-            mixdown_to_mono_i16(&samples, ch)
+            mixdown_to_mono_i16(&samples?, ch)
         }
         (SampleFormat::Float, 32) => {
             let samples: Result<Vec<f32>, _> = reader.samples::<f32>().collect();
-            let samples = samples?;
-            mixdown_to_mono_f32(&samples, ch)
+            mixdown_to_mono_f32(&samples?, ch)
         }
-        _ => {
-            return Err("仅支持 16-bit PCM 或 32-bit float 的 WAV".into());
-        }
+        _ => return Err("仅支持 16-bit PCM 或 32-bit float 的 WAV".into()),
     };
 
     Ok((mono, sr))
@@ -143,10 +146,11 @@ fn dominant_frequency_track(
         .collect();
 
     let mut track = Vec::<(f32, f32)>::new();
-    let mut global_peak: Option<(f32, f32, f32)> = None; // (time, freq, mag2)
-    let nyquist = sr / 2.0;
+    let mut global_peak: Option<(f32, f32, f32)> = None;
 
+    let nyquist = sr / 2.0;
     let mut start = 0usize;
+
     while start + win_size <= mono.len() {
         let mut buf: Vec<Complex<f32>> = (0..win_size)
             .map(|i| Complex {
@@ -183,103 +187,6 @@ fn dominant_frequency_track(
     Ok((track, global_peak))
 }
 
-fn draw_track_plot(
-    track: &[(f32, f32)],
-    global_peak: Option<(f32, f32, f32)>,
-    fmax: f32,
-    tmax: f32,
-    out_path: &str,
-    title_name: &str,
-) -> Result<(), Box<dyn Error>> {
-    // 改为 SVG 矢量输出
-    let root = SVGBackend::new(out_path, (1280, 720)).into_drawing_area();
-    root.fill(&WHITE)?;
-
-    let mut chart = ChartBuilder::on(&root)
-        .caption(
-            format!("主频轨迹 | {}", title_name),
-            ("sans-serif", 28).into_font(),
-        )
-        .margin(10)
-        .x_label_area_size(40)
-        .y_label_area_size(70)
-        .build_cartesian_2d(0f32..tmax.max(1e-6), 0f32..fmax.max(1.0))?;
-
-    chart
-        .configure_mesh()
-        .x_desc("时间 (秒)")
-        .y_desc("频率 (Hz)")
-        .light_line_style(&RGBColor(230, 230, 230))
-        .y_label_formatter(&|v| format!("{:.0}", v))
-        .draw()?;
-
-    // 叠加十二平均律标线与标注
-    let note_marks = equal_temperament_marks(20.0, fmax);
-    let dense = note_marks.len() > 36; // 过密则只标注 Cn、A4、中央C
-    let note_line_style = ShapeStyle::from(&RGBColor(120, 140, 200).mix(0.30)).stroke_width(1);
-    let label_color = RGBColor(70, 70, 110);
-
-    for (f, name, midi) in &note_marks {
-        // 水平线
-        chart.draw_series(std::iter::once(PathElement::new(
-            vec![(0.0f32, *f), (tmax.max(1e-6), *f)],
-            note_line_style.clone(),
-        )))?;
-
-        // 是否标注文字
-        let is_c = (*midi % 12) == 0;
-        let is_a4 = *midi == 69;
-        let is_c4 = *midi == 60;
-        let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
-
-        if show_label {
-            let label = if is_c4 {
-                format!("{} (中央C) {:.1}Hz", name, *f)
-            } else {
-                format!("{} {:.1}Hz", name, *f)
-            };
-            let x_for_label = (tmax * 0.01).max(0.0);
-            chart.draw_series(std::iter::once(Text::new(
-                label,
-                (x_for_label, *f),
-                ("sans-serif", 12).into_font().color(&label_color),
-            )))?;
-        }
-    }
-
-    // 主频轨迹
-    chart
-        .draw_series(LineSeries::new(
-            track.iter().cloned(),
-            &RGBColor(220, 20, 60),
-        ))?
-        .label("主频")
-        .legend(|(x, y)| PathElement::new(vec![(x, y), (x + 20, y)], &RGBColor(220, 20, 60)));
-
-    // 标注全局最大峰
-    if let Some((t_peak, f_peak, _)) = global_peak {
-        chart.draw_series(std::iter::once(Circle::new(
-            (t_peak, f_peak),
-            5,
-            RGBColor(25, 130, 196).filled(),
-        )))?;
-        chart.draw_series(std::iter::once(Text::new(
-            format!("peak: {:.2}s, {:.1}Hz", t_peak, f_peak),
-            (t_peak, f_peak),
-            ("sans-serif", 16).into_font().color(&RGBColor(25, 130, 196)),
-        )))?;
-    }
-
-    chart
-        .configure_series_labels()
-        .background_style(&WHITE.mix(0.8))
-        .border_style(&BLACK)
-        .draw()?;
-
-    root.present()?;
-    Ok(())
-}
-
 // 生成 [fmin, fmax] 内的十二平均律标注（返回：频率、名、MIDI）
 fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
     let names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
@@ -296,7 +203,7 @@ fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
     v
 }
 
-// === 合成与播放 ===
+// ========================== 合成与播放 ==========================
 
 fn synth_sine_from_track(
     track: &[(f32, f32)],
@@ -308,7 +215,6 @@ fn synth_sine_from_track(
         return vec![];
     }
 
-    // 若轨迹时间不从 0 开始，补一个起点
     let mut t0 = track[0].0;
     let mut local_track = track.to_vec();
     if t0 > 0.0 {
@@ -326,12 +232,10 @@ fn synth_sine_from_track(
 
     for i in 0..n {
         let t = i as f32 / sr_out_f;
-
         while k + 1 < local_track.len() && t > local_track[k + 1].0 {
             k += 1;
         }
 
-        // 线性插值频率
         let f_inst = if k + 1 < local_track.len() {
             let (t0, f0) = local_track[k];
             let (t1, f1) = local_track[k + 1];
@@ -350,7 +254,7 @@ fn synth_sine_from_track(
         y.push(amp * phase.sin());
     }
 
-    // 淡入淡出 20ms
+    // 20ms 淡入淡出
     let fade = (0.02 * sr_out_f) as usize;
     for i in 0..fade.min(y.len()) {
         let g = i as f32 / fade as f32;
@@ -362,13 +266,224 @@ fn synth_sine_from_track(
     y
 }
 
-fn play_audio_blocking(samples: &[f32], sample_rate: u32) -> Result<(), Box<dyn Error>> {
-    use rodio::{buffer::SamplesBuffer, OutputStream, Sink};
-    let (_stream, handle) = OutputStream::try_default()?;
-    let sink = Sink::try_new(&handle)?;
-    let buf = SamplesBuffer::new(1, sample_rate, samples.to_vec());
-    sink.append(buf);
-    sink.set_volume(0.9);
-    sink.sleep_until_end();
-    Ok(())
+// ========================== GUI 应用 ==========================
+
+struct App {
+    file_name: String,
+    duration: f64,
+    fmax: f64,
+    track: Vec<[f64; 2]>,                 // (t, f)
+    global_peak: Option<(f64, f64, f32)>, // (t, f, mag2)
+    note_marks: Vec<(f64, String, i32)>,  // (freq, name, midi)
+
+    // 交互选项
+    show_note_lines: bool,
+    dense_threshold: usize, // > 阈值时仅标 Cn/A4/中央C
+    time_bounds: (f64, f64), // 初始视图
+    freq_bounds: (f64, f64),
+
+    // 音频播放
+    synth: Vec<f32>,
+    sr_out: u32,
+    stream: Option<OutputStream>,
+    handle: Option<OutputStreamHandle>,
+    sink: Option<Sink>,
+    playing: bool,
+}
+
+impl App {
+    fn new(
+        file_name: String,
+        duration: f64,
+        fmax: f64,
+        track: Vec<[f64; 2]>,
+        note_marks: Vec<(f64, String, i32)>,
+        global_peak: Option<(f64, f64, f32)>,
+        synth: Vec<f32>,
+        sr_out: u32,
+    ) -> Self {
+        Self {
+            file_name,
+            duration,
+            fmax,
+            time_bounds: (0.0, duration.max(1e-6)),
+            freq_bounds: (0.0, fmax.max(1.0)),
+            track,
+            global_peak,
+            note_marks,
+            show_note_lines: true,
+            dense_threshold: 36,
+            synth,
+            sr_out,
+            stream: None,
+            handle: None,
+            sink: None,
+            playing: false,
+        }
+    }
+
+    fn start_play(&mut self) {
+        if self.synth.is_empty() || self.playing {
+            return;
+        }
+        if self.stream.is_none() {
+            if let Ok((stream, handle)) = OutputStream::try_default() {
+                self.handle = Some(handle);
+                self.stream = Some(stream);
+            }
+        }
+        if let (Some(handle), None) = (&self.handle, &self.sink) {
+            if let Ok(sink) = Sink::try_new(handle) {
+                let buf = SamplesBuffer::new(1, self.sr_out, self.synth.clone());
+                sink.append(buf);
+                sink.set_volume(0.9);
+                self.sink = Some(sink);
+                self.playing = true;
+            }
+        }
+        if let Some(sink) = &self.sink {
+            sink.play();
+            self.playing = true;
+        }
+    }
+
+    fn stop_play(&mut self) {
+        if let Some(sink) = &self.sink {
+            sink.stop();
+        }
+        self.sink = None;
+        self.playing = false;
+        // 不释放 stream/handle，避免反复创建；如需释放可同时置 None
+    }
+
+    fn draw_plot(&self, ui: &mut egui::Ui) {
+        let mut plot = Plot::new("dominant_freq_plot")
+            .legend(Legend::default())
+            .allow_scroll(true)
+            .allow_zoom(true)
+            .allow_boxed_zoom(true)
+            .allow_drag(true)
+            .include_x(self.time_bounds.0)
+            .include_x(self.time_bounds.1)
+            .include_y(self.freq_bounds.0)
+            .include_y(self.freq_bounds.1)
+            .label_formatter(|name, value| {
+                if !name.is_empty() {
+                    format!("{name}\n时间: {:.3}s\n频率: {:.1}Hz", value.x, value.y)
+                } else {
+                    format!("时间: {:.3}s\n频率: {:.1}Hz", value.x, value.y)
+                }
+            });
+
+        plot.show(ui, |plot_ui| {
+            // 十二平均律水平线
+            if self.show_note_lines {
+                let dense = self.note_marks.len() > self.dense_threshold;
+                let bounds = plot_ui.plot_bounds();
+                let x_span = bounds.max()[0] - bounds.min()[0];
+                let label_x = bounds.min()[0] + 0.01 * x_span;
+
+                for (f, name, midi) in &self.note_marks {
+                    let is_c = *midi % 12 == 0;
+                    let is_a4 = *midi == 69;
+                    let is_c4 = *midi == 60;
+                    let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
+
+                    let mut line = HLine::new(*f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
+                    if is_c4 {
+                        // 中央 C 更显眼
+                        line = HLine::new(*f).color(Color32::from_rgb(25, 130, 196));
+                    }
+                    plot_ui.hline(line);
+
+                    if show_label {
+                        let label = if is_c4 {
+                            format!("{name} (中央C) {:.1}Hz", f)
+                        } else {
+                            format!("{name} {:.1}Hz", f)
+                        };
+                        plot_ui.text(
+                            PlotText::new(PlotPoint {x: label_x, y: *f }, label)
+                                .color(Color32::from_rgb(70, 70, 110))
+                                .anchor(Align2([Align::Min, Align::Center])) // 左对齐，垂直居中
+                                .name("notes"),
+                        );
+                    }
+                }
+            }
+
+            // 主频轨迹
+            let line = Line::new(PlotPoints::from_iter(self.track.iter().map(|p| [p[0], p[1]])))
+                .name("主频轨迹")
+                .color(Color32::from_rgb(220, 20, 60));
+            plot_ui.line(line);
+
+            // 全局峰值标记
+            if let Some((t_peak, f_peak, _)) = self.global_peak {
+                let peak_line = Line::new(PlotPoints::from_iter([[t_peak, f_peak], [t_peak, f_peak]]))
+                    .name(format!("峰值 {:.3}s, {:.1}Hz", t_peak, f_peak))
+                    .color(Color32::from_rgb(25, 130, 196));
+                plot_ui.line(peak_line);
+            }
+
+            // 鼠标坐标提示（光标位置 -> 最近音名）
+            if let Some(pointer) = plot_ui.pointer_coordinate() {
+                let (name, f_note) = nearest_note(pointer.y);
+                let txt = format!("最近音: {name} ≈ {:.1}Hz", f_note);
+                plot_ui.text(
+                    PlotText::new(PlotPoint {x: pointer.x, y: pointer.y}, txt)
+                        .anchor(Align2([Align::Min, Align::Center]))
+                        .color(Color32::from_rgb(50, 50, 50)),
+                );
+            }
+        });
+    }
+}
+
+// 最近的十二平均律音名
+fn nearest_note(freq: f64) -> (String, f64) {
+    if freq <= 0.0 {
+        return ("N/A".into(), 0.0);
+    }
+    let midi = (69.0 + 12.0 * (freq / 440.0).log2()).round();
+    let midi_i = midi.clamp(0.0, 127.0) as i32;
+    let names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+    let pc = (midi_i % 12) as usize;
+    let octave = (midi_i / 12) - 1;
+    let name = format!("{}{}", names[pc], octave);
+    let f = 440.0 * 2f64.powf((midi_i as f64 - 69.0) / 12.0);
+    (name, f)
+}
+
+impl eframe::App for App {
+    fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+        egui::TopBottomPanel::top("top").show(ctx, |ui| {
+            ui.horizontal_wrapped(|ui| {
+                ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
+                ui.separator();
+                ui.label(format!("时长: {:.3}s", self.duration));
+                ui.separator();
+                ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
+                ui.separator();
+                ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
+                ui.separator();
+                if ui.button(if self.playing { "停止播放" } else { "播放合成音" }).clicked() {
+                    if self.playing {
+                        self.stop_play();
+                    } else {
+                        self.start_play();
+                    }
+                }
+                if ui.button("复位视图").clicked() {
+                    self.time_bounds = (0.0, self.duration.max(1e-6));
+                    self.freq_bounds = (0.0, self.fmax.max(1.0));
+                }
+                ui.label("提示：滚轮在指针处缩放，拖拽平移，框选放大");
+            });
+        });
+
+        egui::CentralPanel::default().show(ctx, |ui| {
+            self.draw_plot(ui);
+        });
+    }
 }
