@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui_plot::{HLine, Legend, Line, Plot, PlotBounds, PlotPoint, PlotPoints, Text as PlotText};
+use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Text as PlotText};
 use ecolor::Color32;
 use egui::RichText;
 use hound::{SampleFormat, WavReader};
@@ -7,7 +7,7 @@ use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path};
 use eframe::egui::Align;
-use eframe::emath::Align2;
+use eframe::emath::{Align2, Vec2b};
 use egui_chinese_font::setup_chinese_fonts;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -215,12 +215,12 @@ fn synth_sine_from_track(
         return vec![];
     }
 
-    let mut t0 = track[0].0;
-    let mut local_track = track.to_vec();
-    if t0 > 0.0 {
-        local_track.insert(0, (0.0, track[0].1));
-        t0 = 0.0;
-    }
+    // let mut t0 = track[0].0;
+    let local_track = track.to_vec();
+    // if t0 > 0.0 {
+    //     local_track.insert(0, (0.0, track[0].1));
+    //     t0 = 0.0;
+    // }
 
     let n = (duration * sr_out as f32).round() as usize;
     let sr_out_f = sr_out as f32;
@@ -357,12 +357,13 @@ impl App {
     }
 
     fn draw_plot(&self, ui: &mut egui::Ui) {
-        let mut plot = Plot::new("dominant_freq_plot")
+        let plot = Plot::new("dominant_freq_plot")
             .legend(Legend::default())
             .allow_scroll(true)
             .allow_zoom(true)
             .allow_boxed_zoom(true)
             .allow_drag(true)
+            .auto_bounds(Vec2b::FALSE)
             .include_x(self.time_bounds.0)
             .include_x(self.time_bounds.1)
             .include_y(self.freq_bounds.0)
