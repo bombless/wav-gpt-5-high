@@ -655,12 +655,6 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
-                ui.separator();
-                ui.label(format!("时长: {:.3}s", self.duration));
-                ui.separator();
-                ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
-                ui.separator();
                 ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
                 ui.separator();
                 ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
@@ -713,6 +707,12 @@ impl eframe::App for App {
                         self.start_play();
                     }
                 }
+                ui.separator();
+                ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
+                ui.separator();
+                ui.label(format!("时长: {:.3}s", self.duration));
+                ui.separator();
+                ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
 
                 if self.playing {
                     ui.separator();
@@ -720,12 +720,6 @@ impl eframe::App for App {
                                                    self.play_position, self.duration, self.selected_track.label()))
                         .color(Color32::from_rgb(0, 200, 0)));
                 }
-                ui.separator();
-                if ui.button("复位视图").clicked() {
-                    self.time_bounds = (0.0, self.duration.max(1e-6));
-                    self.freq_bounds = (0.0, self.fmax.max(1.0));
-                }
-                ui.label("提示：滚轮在指针处缩放，拖拽平移，框选放大");
             });
         });
 
