@@ -73,7 +73,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         native_options,
         Box::new(|cc| {
             setup_chinese_fonts(&cc.egui_ctx).expect("Failed to load Chinese fonts");
-            Box::new(app)
+            Ok(Box::new(app))
         }),
     )?;
 
@@ -592,7 +592,7 @@ impl App {
     fn draw_plot(&self, ui: &mut egui::Ui) {
         let plot = Plot::new("dominant_freq_plot")
             .legend(Legend::default())
-            .allow_scroll(false)
+            .allow_scroll(true)
             .allow_zoom(true)
             .allow_boxed_zoom(true)
             .allow_drag(true)
@@ -646,7 +646,7 @@ impl App {
                         (Color32::from_rgba_unmultiplied(100, 150, 255, 150), 1.0)
                     };
 
-                    let beat_line = VLine::new(beat_time)
+                    let beat_line = VLine::new("beat_time", beat_time)
                         .color(color)
                         .width(width);
                     plot_ui.vline(beat_line);
@@ -671,7 +671,7 @@ impl App {
                             let rect_steps = 10;
                             for i in 0..rect_steps {
                                 let y = rect_y_min + (rect_y_max - rect_y_min) * i as f64 / rect_steps as f64;
-                                let bg_line = Line::new(PlotPoints::from_iter(vec![
+                                let bg_line = Line::new("PlotPoints", PlotPoints::from_iter(vec![
                                     [rect_x_min, y],
                                     [rect_x_max, y],
                                 ]))
@@ -693,25 +693,25 @@ impl App {
                             let border_width = if *is_strong { 2.5 } else { 1.5 };
 
                             // 上边框
-                            plot_ui.line(Line::new(PlotPoints::from_iter(vec![
+                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
                                 [rect_x_min, rect_y_max],
                                 [rect_x_max, rect_y_max],
                             ])).color(border_color).width(border_width));
 
                             // 下边框
-                            plot_ui.line(Line::new(PlotPoints::from_iter(vec![
+                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
                                 [rect_x_min, rect_y_min],
                                 [rect_x_max, rect_y_min],
                             ])).color(border_color).width(border_width));
 
                             // 左边框
-                            plot_ui.line(Line::new(PlotPoints::from_iter(vec![
+                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
                                 [rect_x_min, rect_y_min],
                                 [rect_x_min, rect_y_max],
                             ])).color(border_color).width(border_width));
 
                             // 右边框
-                            plot_ui.line(Line::new(PlotPoints::from_iter(vec![
+                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
                                 [rect_x_max, rect_y_min],
                                 [rect_x_max, rect_y_max],
                             ])).color(border_color).width(border_width));
@@ -719,7 +719,7 @@ impl App {
                             // 在矩形中心标注音符名称
                             let label = format!("{}\n{:.1}Hz", note_name, note_freq);
                             plot_ui.text(
-                                PlotText::new(
+                                PlotText::new("beat_note",
                                     PlotPoint { x: beat_time + rect_width / 2.0, y: rect_y_center },
                                     label
                                 )
@@ -736,7 +736,7 @@ impl App {
                         let label = format!("小节 {}", bar_num);
                         let label_y = bounds.min()[1] + 0.02 * y_span;
                         plot_ui.text(
-                            PlotText::new(PlotPoint { x: beat_time, y: label_y }, label)
+                            PlotText::new("beats", PlotPoint { x: beat_time, y: label_y }, label)
                                 .color(Color32::from_rgb(0, 100, 200))
                                 .anchor(Align2([Align::Center, Align::Min]))
                                 .name("beats"),
@@ -758,9 +758,9 @@ impl App {
                     let is_c4 = *midi == 60;
                     let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
 
-                    let mut line = HLine::new(*f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
+                    let mut line = HLine::new("notes", *f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
                     if is_c4 {
-                        line = HLine::new(*f).color(Color32::from_rgb(25, 130, 196));
+                        line = HLine::new("notes", *f).color(Color32::from_rgb(25, 130, 196));
                     }
                     plot_ui.hline(line);
 
@@ -771,7 +771,7 @@ impl App {
                             format!("{name} {:.1}Hz", f)
                         };
                         plot_ui.text(
-                            PlotText::new(PlotPoint {x: label_x, y: *f }, label)
+                            PlotText::new("notes", PlotPoint {x: label_x, y: *f }, label)
                                 .color(Color32::from_rgb(70, 70, 110))
                                 .anchor(Align2([Align::Min, Align::Center]))
                                 .name("notes"),
@@ -794,7 +794,7 @@ impl App {
                         _ => (1.5, Color32::from_rgb(147, 51, 234)),
                     };
 
-                    let line = Line::new(PlotPoints::from_iter(points))
+                    let line = Line::new(format!("采样频率 #{}", i + 1), PlotPoints::from_iter(points))
                         .name(format!("采样频率 #{}", i + 1))
                         .color(color)
                         .width(width);
@@ -809,7 +809,7 @@ impl App {
                 (2.0, Color32::from_rgb(220, 20, 60))
             };
 
-            let line = Line::new(PlotPoints::from_iter(self.track.iter().map(|p| [p[0], p[1]])))
+            let line = Line::new("主频轨迹（最大值）", PlotPoints::from_iter(self.track.iter().map(|p| [p[0], p[1]])))
                 .name("主频轨迹（最大值）")
                 .color(max_color)
                 .width(max_width);
@@ -817,7 +817,7 @@ impl App {
 
             // 全局峰值标记
             if let Some((t_peak, f_peak, _)) = self.global_peak {
-                let peak_line = Line::new(PlotPoints::from_iter([[t_peak, f_peak], [t_peak, f_peak]]))
+                let peak_line = Line::new(format!("峰值 {:.3}s, {:.1}Hz", t_peak, f_peak), PlotPoints::from_iter([[t_peak, f_peak], [t_peak, f_peak]]))
                     .name(format!("峰值 {:.3}s, {:.1}Hz", t_peak, f_peak))
                     .color(Color32::from_rgb(25, 130, 196));
                 plot_ui.line(peak_line);
@@ -825,7 +825,7 @@ impl App {
 
             // 播放位置竖线
             if self.playing && self.play_position > 0.0 {
-                let play_line = VLine::new(self.play_position)
+                let play_line = VLine::new(format!("播放位置: {:.2}s", self.play_position), self.play_position)
                     .name(format!("播放位置: {:.2}s", self.play_position))
                     .color(Color32::from_rgba_unmultiplied(0, 255, 0, 200))
                     .width(2.0);
@@ -837,7 +837,7 @@ impl App {
                 let (name, f_note) = nearest_note(pointer.y);
                 let txt = format!("最近音: {name} ≈ {:.1}Hz", f_note);
                 plot_ui.text(
-                    PlotText::new(PlotPoint {x: pointer.x + 0.2, y: pointer.y}, txt)
+                    PlotText::new("最近音", PlotPoint {x: pointer.x + 0.2, y: pointer.y}, txt)
                         .anchor(Align2([Align::Min, Align::Min]))
                         .color(Color32::from_rgb(250, 50, 50)),
                 );
