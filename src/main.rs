@@ -223,6 +223,85 @@ fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
 }
 
 // ========================== 合成与播放 ==========================
+fn synth_beat_notes(
+    beat_notes: &[(f64, String, f64, bool)],
+    sr_out: u32,
+    duration: f32,
+    amp: f32,
+    beat_duration: f64,
+) -> Vec<f32> {
+    if beat_notes.is_empty() || duration <= 0.0 {
+        return vec![];
+    }
+
+    let n = (duration * sr_out as f32).round() as usize;
+    let sr_out_f = sr_out as f32;
+    let mut y = vec![0.0f32; n];
+
+    for (beat_time, _note_name, note_freq, is_bar_start) in beat_notes {
+        let freq = *note_freq as f32;
+        let start_sample = (*beat_time as f32 * sr_out_f) as usize;
+
+        // 音符持续时间为节拍的90%，留10%间隙
+        let note_duration = (beat_duration * 0.9) as f32;
+        let end_sample = ((beat_time + note_duration as f64) as f32 * sr_out_f) as usize;
+
+        if start_sample >= n {
+            break;
+        }
+
+        let note_samples = (end_sample.min(n) - start_sample).max(1);
+
+        // ADSR 包络参数
+        let attack = (0.01 * sr_out_f) as usize;  // 10ms 上升
+        let decay = (0.05 * sr_out_f) as usize;   // 50ms 衰减
+        let sustain_level = if *is_bar_start { 0.8 } else { 0.6 };  // 小节开始音量更大
+        let release = (0.1 * sr_out_f) as usize;  // 100ms 释放
+
+        let mut phase = 0.0f32;
+
+        for i in 0..note_samples {
+            let sample_idx = start_sample + i;
+            if sample_idx >= n {
+                break;
+            }
+
+            // 计算 ADSR 包络
+            let envelope = if i < attack {
+                // Attack: 线性上升
+                i as f32 / attack as f32
+            } else if i < attack + decay {
+                // Decay: 从1.0衰减到sustain_level
+                1.0 - (1.0 - sustain_level) * ((i - attack) as f32 / decay as f32)
+            } else if i < note_samples.saturating_sub(release) {
+                // Sustain: 保持恒定
+                sustain_level
+            } else {
+                // Release: 线性下降到0
+                sustain_level * ((note_samples - i) as f32 / release as f32)
+            };
+
+            // 生成正弦波
+            phase += 2.0 * PI * freq / sr_out_f;
+            if phase > 2.0 * PI {
+                phase -= 2.0 * PI;
+            }
+
+            y[sample_idx] += amp * envelope * phase.sin();
+        }
+    }
+
+    // 整体淡入淡出
+    let fade = (0.02 * sr_out_f) as usize;
+    for i in 0..fade.min(y.len()) {
+        let g = i as f32 / fade as f32;
+        y[i] *= g;
+        let j = y.len() - 1 - i;
+        y[j] *= g;
+    }
+
+    y
+}
 
 fn synth_sine_from_track(
     track: &[(f32, f32)],
@@ -287,6 +366,7 @@ enum PlaybackTrack {
     Sample1,
     Sample2,
     Sample3,
+    BeatNotes,  // 新增：节拍音符
 }
 
 impl PlaybackTrack {
@@ -296,6 +376,7 @@ impl PlaybackTrack {
             PlaybackTrack::Sample1 => "采样频率 #1",
             PlaybackTrack::Sample2 => "采样频率 #2",
             PlaybackTrack::Sample3 => "采样频率 #3",
+            PlaybackTrack::BeatNotes => "节拍音符",  // 新增
         }
     }
 }
@@ -421,20 +502,21 @@ impl App {
         beat_notes
     }
 
-    fn get_selected_track_data(&self) -> Vec<(f32, f32)> {
+    fn get_selected_track_data(&self) -> Option<Vec<(f32, f32)>> {
         match self.selected_track {
             PlaybackTrack::Max => {
-                self.track.iter().map(|p| (p[0] as f32, p[1] as f32)).collect()
+                Some(self.track.iter().map(|p| (p[0] as f32, p[1] as f32)).collect())
             }
             PlaybackTrack::Sample1 => {
-                self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[0] as f32)).collect()
+                Some(self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[0] as f32)).collect())
             }
             PlaybackTrack::Sample2 => {
-                self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[1] as f32)).collect()
+                Some(self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[1] as f32)).collect())
             }
             PlaybackTrack::Sample3 => {
-                self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[2] as f32)).collect()
+                Some(self.sampled_track.iter().map(|(t, freqs)| (*t as f32, freqs[2] as f32)).collect())
             }
+            _ => None,
         }
     }
 
@@ -443,8 +525,17 @@ impl App {
             return;
         }
 
-        let track_data = self.get_selected_track_data();
-        let synth = synth_sine_from_track(&track_data, self.sr_out, self.duration as f32, 0.25);
+        // 根据选择的轨迹类型生成音频
+        let synth = if self.selected_track == PlaybackTrack::BeatNotes {
+            // 播放节拍音符
+            let beat_notes = self.analyze_beat_notes();
+            let beat_duration = 60.0 / self.bpm;
+            synth_beat_notes(&beat_notes, self.sr_out, self.duration as f32, 0.3, beat_duration)
+        } else {
+            // 播放连续频率轨迹
+            let track_data = self.get_selected_track_data().unwrap();
+            synth_sine_from_track(&track_data, self.sr_out, self.duration as f32, 0.25)
+        };
 
         if synth.is_empty() {
             return;
@@ -817,8 +908,10 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample1, PlaybackTrack::Sample1.label());
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample2, PlaybackTrack::Sample2.label());
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample3, PlaybackTrack::Sample3.label());
+                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::BeatNotes, PlaybackTrack::BeatNotes.label());  // 新增
                     });
 
+                // 如果正在播放时切换轨迹，先停止播放
                 if self.playing && prev_selection != self.selected_track {
                     self.stop_play();
                 }
