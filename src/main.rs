@@ -29,7 +29,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sr_in = sample_rate as f32;
     let duration = mono.len() as f32 / sr_in;
 
-    let (track, sampled_track, global_peak) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
+    let (track, sampled_track) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
     let fmax = sr_in / 2.0;
 
     // 准备 App 状态
@@ -57,7 +57,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
-        global_peak.map(|(t, f, m)| (t as f64, f as f64, m)),
         sr_out,
         duration as f64,
     );
@@ -141,7 +140,7 @@ fn dominant_frequency_track(
     sr: f32,
     win_size: usize,
     hop_size: usize,
-) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>, Option<(f32, f32, f32)>), Box<dyn Error>> {
+) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>), Box<dyn Error>> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(win_size);
     let hann: Vec<f32> = (0..win_size)
@@ -150,7 +149,6 @@ fn dominant_frequency_track(
 
     let mut track = Vec::<(f32, f32)>::new();
     let mut sampled_track = Vec::<(f32, [f32; 3])>::new();
-    let mut global_peak: Option<(f32, f32, f32)> = None;
 
     let nyquist = sr / 2.0;
     let mut start = 0usize;
@@ -198,14 +196,10 @@ fn dominant_frequency_track(
         track.push((t, f_max));
         sampled_track.push((t, top3_freqs));
 
-        if max_mag2 > global_peak.map(|(_, _, m)| m).unwrap_or(-1.0) {
-            global_peak = Some((t, f_max, max_mag2));
-        }
-
         start += hop_size;
     }
 
-    Ok((track, sampled_track, global_peak))
+    Ok((track, sampled_track))
 }
 
 fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
@@ -388,7 +382,6 @@ struct App {
     fmax: f64,
     track: Vec<[f64; 2]>,
     sampled_track: Vec<(f64, [f64; 3])>,
-    global_peak: Option<(f64, f64, f32)>,
     note_marks: Vec<(f64, String, i32)>,
 
     show_note_lines: bool,
@@ -420,7 +413,6 @@ impl App {
         track: Vec<[f64; 2]>,
         sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
-        global_peak: Option<(f64, f64, f32)>,
         sr_out: u32,
         _total_duration: f64,
     ) -> Self {
@@ -432,7 +424,6 @@ impl App {
             freq_bounds: (0.0, fmax.max(1.0)),
             track,
             sampled_track,
-            global_peak,
             note_marks,
             show_note_lines: true,
             show_sampled_freqs: true,
@@ -833,14 +824,6 @@ impl App {
                 .color(max_color)
                 .width(max_width);
             plot_ui.line(line);
-
-            // 全局峰值标记
-            if let Some((t_peak, f_peak, _)) = self.global_peak {
-                let peak_line = Line::new("全局峰值标记", PlotPoints::from_iter([[t_peak, f_peak], [t_peak, f_peak]]))
-                    .name(format!("峰值 {:.3}s, {:.1}Hz", t_peak, f_peak))
-                    .color(Color32::from_rgb(25, 130, 196));
-                plot_ui.line(peak_line);
-            }
 
             // 播放位置竖线
             if self.play_position > 0.0 {
