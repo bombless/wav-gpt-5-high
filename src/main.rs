@@ -1,5 +1,5 @@
 use eframe::egui;
-use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Text as PlotText, VLine};
+use egui_plot::{BoxElem, BoxPlot, HLine, Legend, Line, Plot, PlotItem, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
 use egui::{RichText, Color32};
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
@@ -7,7 +7,7 @@ use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::fs::File;
 use std::io::Write;
-use eframe::egui::Align;
+use eframe::egui::{Align, Stroke};
 use eframe::emath::{Align2, Vec2b};
 use egui_chinese_font::setup_chinese_fonts;
 
@@ -22,7 +22,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
     let wav_path = &args[1];
-    let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2048);
+    let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(4096);
     let hop_size: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(512);
 
     let (mono, sample_rate) = read_wav_mono_f32(wav_path)?;
@@ -570,7 +570,7 @@ impl App {
         self.sink = None;
         self.playing = false;
         self.play_start_time = None;
-        self.play_position = 0.0;
+        // self.play_position = 0.0;
     }
 
     fn update_play_position(&mut self) {
@@ -677,21 +677,21 @@ impl App {
                             let rect_y_max = rect_y_max.clamp(self.freq_bounds.0, self.freq_bounds.1);
 
                             // 使用 Points 绘制矩形背景（用密集点模拟填充）
-                            let rect_steps = 10;
-                            for i in 0..rect_steps {
-                                let y = rect_y_min + (rect_y_max - rect_y_min) * i as f64 / rect_steps as f64;
-                                let bg_line = Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                                    [rect_x_min, y],
-                                    [rect_x_max, y],
-                                ]))
-                                    .color(if *is_strong {
-                                        Color32::from_rgba_unmultiplied(80, 120, 180, 180)
-                                    } else {
-                                        Color32::from_rgba_unmultiplied(100, 140, 200, 120)
-                                    })
-                                    .width(rect_height as f32 / rect_steps as f32 * 1.2);
-                                plot_ui.line(bg_line);
-                            }
+                            // let rect_steps = 10;
+                            // for i in 0..rect_steps {
+                            //     let y = rect_y_min + (rect_y_max - rect_y_min) * i as f64 / rect_steps as f64;
+                            //     let bg_line = Line::new("PlotPoints", PlotPoints::from_iter(vec![
+                            //         [rect_x_min, y],
+                            //         [rect_x_max, y],
+                            //     ]))
+                            //         .color(if *is_strong {
+                            //             Color32::from_rgba_unmultiplied(80, 120, 180, 180)
+                            //         } else {
+                            //             Color32::from_rgba_unmultiplied(100, 140, 200, 120)
+                            //         })
+                            //         .width(rect_height as f32 / rect_steps as f32 * 1.2);
+                            //     plot_ui.line(bg_line);
+                            // }
 
                             // 绘制矩形边框（四条线）
                             let border_color = if *is_strong {
@@ -701,29 +701,39 @@ impl App {
                             };
                             let border_width = if *is_strong { 2.5 } else { 1.5 };
 
-                            // 上边框
-                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
+                            // // 上边框
+                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
+                            //     [rect_x_min, rect_y_max],
+                            //     [rect_x_max, rect_y_max],
+                            // ])).color(border_color).width(border_width));
+                            //
+                            // // 下边框
+                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
+                            //     [rect_x_min, rect_y_min],
+                            //     [rect_x_max, rect_y_min],
+                            // ])).color(border_color).width(border_width));
+                            //
+                            // // 左边框
+                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
+                            //     [rect_x_min, rect_y_min],
+                            //     [rect_x_min, rect_y_max],
+                            // ])).color(border_color).width(border_width));
+                            //
+                            // // 右边框
+                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
+                            //     [rect_x_max, rect_y_min],
+                            //     [rect_x_max, rect_y_max],
+                            // ])).color(border_color).width(border_width));
+
+                            let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
+                                [rect_x_min, rect_y_min],
                                 [rect_x_min, rect_y_max],
                                 [rect_x_max, rect_y_max],
-                            ])).color(border_color).width(border_width));
-
-                            // 下边框
-                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                                [rect_x_min, rect_y_min],
                                 [rect_x_max, rect_y_min],
-                            ])).color(border_color).width(border_width));
 
-                            // 左边框
-                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                                [rect_x_min, rect_y_min],
-                                [rect_x_min, rect_y_max],
-                            ])).color(border_color).width(border_width));
+                            ])).fill_color(border_color).stroke(Stroke::new(0.0, border_color));
+                            plot_ui.polygon(rectangle);
 
-                            // 右边框
-                            plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                                [rect_x_max, rect_y_min],
-                                [rect_x_max, rect_y_max],
-                            ])).color(border_color).width(border_width));
 
                             // 在矩形中心标注音符名称
                             let label = format!("{}\n{:.1}Hz", note_name, note_freq);
@@ -833,7 +843,7 @@ impl App {
             }
 
             // 播放位置竖线
-            if self.playing && self.play_position > 0.0 {
+            if self.play_position > 0.0 {
                 let play_line = VLine::new("播放位置竖线", self.play_position)
                     .name(format!("播放位置: {:.2}s", self.play_position))
                     .color(Color32::from_rgba_unmultiplied(0, 255, 0, 200))
