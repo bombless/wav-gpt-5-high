@@ -1,13 +1,11 @@
 use eframe::egui;
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
-use egui::{RichText, Color32};
+use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b};
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::{HashMap, HashSet};
-use eframe::egui::{Align, Pos2, Stroke};
-use eframe::emath::{Align2, Vec2b};
 use egui_chinese_font::setup_chinese_fonts;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -585,6 +583,78 @@ impl App {
             let mut show_candidate_notes = self.cached_notes.configuring;
             let mut note_marks = None;
 
+
+            // 十二平均律水平线
+            if self.show_note_lines {
+                let dense = self.note_marks.len() > self.dense_threshold;
+                let bounds = plot_ui.plot_bounds();
+                let x_span = bounds.max()[0] - bounds.min()[0];
+                let label_x = (bounds.min()[0].max(bounds.max()[0] - 0.01)).min(bounds.min()[0] + 0.01 * x_span + 0.01);
+
+                for (f, name, midi) in &self.note_marks {
+                    let is_c = *midi % 12 == 0;
+                    let is_a4 = *midi == 69;
+                    let is_c4 = *midi == 60;
+                    let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
+
+                    let mut line = HLine::new("show_note_lines", *f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
+                    if is_c4 {
+                        line = HLine::new("show_note_lines", *f).color(Color32::from_rgb(25, 130, 196));
+                    }
+                    plot_ui.hline(line);
+
+                    if show_label {
+                        let label = if is_c4 {
+                            format!("{name} (中央C) {:.1}Hz", f)
+                        } else {
+                            format!("{name} {:.1}Hz", f)
+                        };
+                        plot_ui.text(
+                            PlotText::new("show_note_lines", PlotPoint {x: label_x.clamp(self.time_bounds.0, self.time_bounds.1), y: f.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
+                                .color(Color32::from_rgb(70, 70, 110))
+                                .anchor(Align2([Align::Min, Align::Center]))
+                                .name("notes"),
+                        );
+                    }
+                }
+            }
+
+            // 绘制三个采样频率
+            if self.show_sampled_freqs {
+                for i in 0..3 {
+                    let points: Vec<[f64; 2]> = self.sampled_track.iter()
+                        .map(|(t, freqs)| [*t, freqs[i]])
+                        .collect();
+
+                    let (width, color) = match (i, self.selected_track) {
+                        (0, PlaybackTrack::Sample1) => (2.5, Color32::from_rgb(200, 100, 255)),
+                        (1, PlaybackTrack::Sample2) => (2.5, Color32::from_rgb(200, 100, 255)),
+                        (2, PlaybackTrack::Sample3) => (2.5, Color32::from_rgb(200, 100, 255)),
+                        _ => (1.5, Color32::from_rgb(147, 51, 234)),
+                    };
+
+                    let line = Line::new("show_sampled_freqs", PlotPoints::from_iter(points))
+                        .name(format!("采样频率 #{}", i + 1))
+                        .color(color)
+                        .width(width);
+                    plot_ui.line(line);
+                }
+            }
+
+            // 主频轨迹
+            let (max_width, max_color) = if self.selected_track == PlaybackTrack::Max {
+                (3.0, Color32::from_rgb(255, 50, 80))
+            } else {
+                (2.0, Color32::from_rgb(220, 20, 60))
+            };
+
+            let line = Line::new("主频轨迹（最大值）", PlotPoints::from_iter(self.track.iter().cloned()))
+                .name("主频轨迹（最大值）")
+                .color(max_color)
+                .width(max_width);
+            plot_ui.line(line);
+
+
             // 节拍线和音符标注
             if self.show_beat_lines && self.bpm > 0.0 {
                 let beat_duration = 60.0 / self.bpm;
@@ -679,7 +749,7 @@ impl App {
                             plot_ui.text(
                                 PlotText::new("PlotPoints",
                                               PlotPoint { x: beat_time + rect_width / 2.0, y: rect_y_center.clamp(self.freq_bounds.0, self.freq_bounds.1) },
-                                    label
+                                              label
                                 )
                                     .color(Color32::WHITE)
                                     .anchor(Align2::CENTER_CENTER)
@@ -737,76 +807,6 @@ impl App {
                     show_candidate_notes = None;
                 }
             }
-
-            // 十二平均律水平线
-            if self.show_note_lines {
-                let dense = self.note_marks.len() > self.dense_threshold;
-                let bounds = plot_ui.plot_bounds();
-                let x_span = bounds.max()[0] - bounds.min()[0];
-                let label_x = (bounds.min()[0].max(bounds.max()[0] - 0.01)).min(bounds.min()[0] + 0.01 * x_span + 0.01);
-
-                for (f, name, midi) in &self.note_marks {
-                    let is_c = *midi % 12 == 0;
-                    let is_a4 = *midi == 69;
-                    let is_c4 = *midi == 60;
-                    let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
-
-                    let mut line = HLine::new("show_note_lines", *f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
-                    if is_c4 {
-                        line = HLine::new("show_note_lines", *f).color(Color32::from_rgb(25, 130, 196));
-                    }
-                    plot_ui.hline(line);
-
-                    if show_label {
-                        let label = if is_c4 {
-                            format!("{name} (中央C) {:.1}Hz", f)
-                        } else {
-                            format!("{name} {:.1}Hz", f)
-                        };
-                        plot_ui.text(
-                            PlotText::new("show_note_lines", PlotPoint {x: label_x.clamp(self.time_bounds.0, self.time_bounds.1), y: f.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
-                                .color(Color32::from_rgb(70, 70, 110))
-                                .anchor(Align2([Align::Min, Align::Center]))
-                                .name("notes"),
-                        );
-                    }
-                }
-            }
-
-            // 绘制三个采样频率
-            if self.show_sampled_freqs {
-                for i in 0..3 {
-                    let points: Vec<[f64; 2]> = self.sampled_track.iter()
-                        .map(|(t, freqs)| [*t, freqs[i]])
-                        .collect();
-
-                    let (width, color) = match (i, self.selected_track) {
-                        (0, PlaybackTrack::Sample1) => (2.5, Color32::from_rgb(200, 100, 255)),
-                        (1, PlaybackTrack::Sample2) => (2.5, Color32::from_rgb(200, 100, 255)),
-                        (2, PlaybackTrack::Sample3) => (2.5, Color32::from_rgb(200, 100, 255)),
-                        _ => (1.5, Color32::from_rgb(147, 51, 234)),
-                    };
-
-                    let line = Line::new("show_sampled_freqs", PlotPoints::from_iter(points))
-                        .name(format!("采样频率 #{}", i + 1))
-                        .color(color)
-                        .width(width);
-                    plot_ui.line(line);
-                }
-            }
-
-            // 主频轨迹
-            let (max_width, max_color) = if self.selected_track == PlaybackTrack::Max {
-                (3.0, Color32::from_rgb(255, 50, 80))
-            } else {
-                (2.0, Color32::from_rgb(220, 20, 60))
-            };
-
-            let line = Line::new("主频轨迹（最大值）", PlotPoints::from_iter(self.track.iter().cloned()))
-                .name("主频轨迹（最大值）")
-                .color(max_color)
-                .width(max_width);
-            plot_ui.line(line);
 
             // 播放位置竖线
             if self.play_position > 0.0 {
@@ -991,11 +991,11 @@ impl eframe::App for App {
                     ui.label("BPM:");
                     ui.add(egui::DragValue::new(&mut self.bpm)
                         .speed(1.0)
-                        .clamp_range(30.0..=300.0));
+                        .range(30.0..=300.0));
 
                     ui.separator();
                     ui.label("拍号:");
-                    egui::ComboBox::from_id_source("beats_per_bar")
+                    egui::ComboBox::from_id_salt("beats_per_bar")
                         .selected_text(format!("{}/4", self.beats_per_bar))
                         .show_ui(ui, |ui| {
                             ui.selectable_value(&mut self.beats_per_bar, 3, "3/4");
@@ -1009,7 +1009,7 @@ impl eframe::App for App {
                 // 播放轨迹选择
                 ui.label("播放轨迹:");
                 let prev_selection = self.selected_track;
-                egui::ComboBox::from_id_source("track_selector")
+                egui::ComboBox::from_id_salt("track_selector")
                     .selected_text(self.selected_track.label())
                     .show_ui(ui, |ui| {
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Max, PlaybackTrack::Max.label());
