@@ -1,13 +1,12 @@
 use eframe::egui;
-use egui_plot::{BoxElem, BoxPlot, HLine, Legend, Line, Plot, PlotItem, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
+use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
 use egui::{RichText, Color32};
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
-use std::fs::File;
-use std::io::Write;
-use eframe::egui::{Align, Stroke};
+use std::collections::{HashMap, HashSet};
+use eframe::egui::{Align, Pos2, Stroke};
 use eframe::emath::{Align2, Vec2b};
 use egui_chinese_font::setup_chinese_fonts;
 
@@ -29,7 +28,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let sr_in = sample_rate as f32;
     let duration = mono.len() as f32 / sr_in;
 
-    let (track, sampled_track) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
+    let (track, sampled_track, tones_track) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
     let fmax = sr_in / 2.0;
 
     // 准备 App 状态
@@ -57,6 +56,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .into_iter()
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
+        tones_track,
         sr_out,
         duration as f64,
     );
@@ -140,7 +140,7 @@ fn dominant_frequency_track(
     sr: f32,
     win_size: usize,
     hop_size: usize,
-) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>), Box<dyn Error>> {
+) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>, Vec<(f32, Vec<(String, f64, f32)>)>), Box<dyn Error>> {
     let mut planner = FftPlanner::<f32>::new();
     let fft = planner.plan_fft_forward(win_size);
     let hann: Vec<f32> = (0..win_size)
@@ -149,6 +149,7 @@ fn dominant_frequency_track(
 
     let mut track = Vec::<(f32, f32)>::new();
     let mut sampled_track = Vec::<(f32, [f32; 3])>::new();
+    let mut tones_track = Vec::new();
 
     let nyquist = sr / 2.0;
     let mut start = 0usize;
@@ -189,17 +190,33 @@ fn dominant_frequency_track(
             },
         ];
 
+        let mut top9_tones = Vec::new();
+        let mut tones = HashSet::new();
+        for p in peaks {
+            let (name, freq) = nearest_note((p.0 as f32 * sr / win_size as f32) as _);
+            if !(freq > 0.0) {
+                continue;
+            }
+            if !tones.contains(&name) {
+                tones.insert(name.clone());
+                top9_tones.push((name, freq, p.1));
+                if top9_tones.len() >= 9 {
+                    break;
+                }
+            }
+        }
+
         let t = start as f32 / sr;
         let f_max = top3_freqs[0];
-        let max_mag2 = peaks[0].1;
 
         track.push((t, f_max));
         sampled_track.push((t, top3_freqs));
+        tones_track.push((t, top9_tones));
 
         start += hop_size;
     }
 
-    Ok((track, sampled_track))
+    Ok((track, sampled_track, tones_track))
 }
 
 fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
@@ -219,7 +236,7 @@ fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
 
 // ========================== 合成与播放 ==========================
 fn synth_beat_notes(
-    beat_notes: &[(f64, String, f64, bool)],
+    beat_notes: &[Beat],
     sr_out: u32,
     duration: f32,
     amp: f32,
@@ -233,8 +250,8 @@ fn synth_beat_notes(
     let sr_out_f = sr_out as f32;
     let mut y = vec![0.0f32; n];
 
-    for (beat_time, _note_name, note_freq, is_bar_start) in beat_notes {
-        let freq = *note_freq as f32;
+    for Beat {beat_start: beat_time, note_freq, configuration, is_bar_start, ..} in beat_notes {
+        let freq = if let Some((_, f)) = configuration { *f as f32 } else { *note_freq as f32 };
         let start_sample = (*beat_time as f32 * sr_out_f) as usize;
 
         // 音符持续时间为节拍的90%，留10%间隙
@@ -383,6 +400,7 @@ struct App {
     track: Vec<[f64; 2]>,
     sampled_track: Vec<(f64, [f64; 3])>,
     note_marks: Vec<(f64, String, i32)>,
+    tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
 
     show_note_lines: bool,
     show_sampled_freqs: bool,
@@ -403,6 +421,7 @@ struct App {
     playing: bool,
     play_start_time: Option<Instant>,
     play_position: f64,
+    cached_notes: CachedNotes,
 }
 
 impl App {
@@ -413,6 +432,7 @@ impl App {
         track: Vec<[f64; 2]>,
         sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
+        tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
         sr_out: u32,
         _total_duration: f64,
     ) -> Self {
@@ -422,9 +442,11 @@ impl App {
             fmax,
             time_bounds: (0.0, duration.max(1e-6)),
             freq_bounds: (0.0, fmax.max(1.0)),
+            cached_notes: CachedNotes::analyze_beat_notes(120.0, duration, &track, &tones_track, 4),
             track,
             sampled_track,
             note_marks,
+            tones_track,
             show_note_lines: true,
             show_sampled_freqs: true,
             dense_threshold: 36,
@@ -441,57 +463,6 @@ impl App {
             play_start_time: None,
             play_position: 0.0,
         }
-    }
-
-    // 分析每个节拍的主导音符
-    fn analyze_beat_notes(&self) -> Vec<(f64, String, f64, bool)> {
-        if self.bpm <= 0.0 {
-            return Vec::new();
-        }
-
-        let beat_duration = 60.0 / self.bpm;
-        let mut beat_notes = Vec::new();
-
-        let num_beats = (self.duration / beat_duration).ceil() as usize;
-
-        for beat_idx in 0..num_beats {
-            let beat_start = beat_idx as f64 * beat_duration;
-            let beat_end = beat_start + beat_duration;
-
-            if beat_start > self.duration {
-                break;
-            }
-
-            // 收集这个节拍内的所有频率数据
-            let mut freqs_in_beat = Vec::new();
-            for (t, freqs) in &self.sampled_track {
-                if *t >= beat_start && *t < beat_end && freqs[0] > 20.0 {
-                    freqs_in_beat.push(freqs[0]);
-                }
-            }
-
-            // 如果节拍内没有足够数据，尝试从 track 中获取
-            if freqs_in_beat.is_empty() {
-                for point in &self.track {
-                    if point[0] >= beat_start && point[0] < beat_end && point[1] > 20.0 {
-                        freqs_in_beat.push(point[1]);
-                    }
-                }
-            }
-
-            if !freqs_in_beat.is_empty() {
-                // 计算中位数频率（比平均值更稳定）
-                freqs_in_beat.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let median_freq = freqs_in_beat[freqs_in_beat.len() / 2];
-
-                let (note_name, note_freq) = nearest_note(median_freq);
-                let is_bar_start = beat_idx % self.beats_per_bar == 0;
-
-                beat_notes.push((beat_start, note_name, note_freq, is_bar_start));
-            }
-        }
-
-        beat_notes
     }
 
     fn get_selected_track_data(&self) -> Option<Vec<(f32, f32)>> {
@@ -520,9 +491,9 @@ impl App {
         // 根据选择的轨迹类型生成音频
         let synth = if self.selected_track == PlaybackTrack::BeatNotes {
             // 播放节拍音符
-            let beat_notes = self.analyze_beat_notes();
+            self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
             let beat_duration = 60.0 / self.bpm;
-            synth_beat_notes(&beat_notes, self.sr_out, self.duration as f32, 0.3, beat_duration)
+            synth_beat_notes(&*self.cached_notes.track, self.sr_out, self.duration as f32, 0.3, beat_duration)
         } else {
             // 播放连续频率轨迹
             let track_data = self.get_selected_track_data().unwrap();
@@ -581,7 +552,7 @@ impl App {
         }
     }
 
-    fn draw_plot(&self, ui: &mut egui::Ui) {
+    fn draw_plot(&mut self, ui: &mut egui::Ui) {
         let plot = Plot::new("dominant_freq_plot")
             .legend(Legend::default())
             .allow_scroll(false)
@@ -603,22 +574,29 @@ impl App {
                 }
             });
 
-        plot.show(ui, |plot_ui| {
+        let mouse_click = ui.input(|i| {
+            i.pointer.any_click()
+        });
+
+        self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
+
+        let show_candidate_notes = plot.show(ui, |plot_ui| {
+
+            let mut show_candidate_notes = self.cached_notes.configuring;
+            let mut note_marks = None;
+
             // 节拍线和音符标注
             if self.show_beat_lines && self.bpm > 0.0 {
                 let beat_duration = 60.0 / self.bpm;
                 let bounds = plot_ui.plot_bounds();
                 let y_span = bounds.max()[1] - bounds.min()[1];
 
-                // 计算节拍音符
-                let beat_notes = if self.show_beat_notes {
-                    self.analyze_beat_notes()
-                } else {
-                    Vec::new()
-                };
 
                 let start_beat = (bounds.min()[0] / beat_duration).floor() as i32;
                 let end_beat = (bounds.max()[0] / beat_duration).ceil() as i32;
+
+                let click_pos = if mouse_click { plot_ui.pointer_coordinate() } else { None };
+                let mut miss_click = true;
 
                 for beat_num in start_beat..=end_beat {
                     if beat_num < 0 {
@@ -647,8 +625,8 @@ impl App {
 
                     // 绘制节拍音符标注框
                     if self.show_beat_notes {
-                        if let Some((_, note_name, note_freq, is_strong)) = beat_notes.iter()
-                            .find(|(t, _, _, _)| (*t - beat_time).abs() < beat_duration * 0.1) {
+                        if let Some(Beat { id, note_name, note_freq, is_bar_start: is_strong, configuration, candidates, ..}) = self.cached_notes.track.iter()
+                            .find(|Beat { beat_start: t, ..}| (*t - beat_time).abs() < beat_duration * 0.1) {
 
                             // 矩形位置：在图表顶部
                             let rect_y_center = bounds.max()[1] - 0.05 * y_span;
@@ -667,22 +645,13 @@ impl App {
                             let rect_y_min = rect_y_min.clamp(self.freq_bounds.0, self.freq_bounds.1);
                             let rect_y_max = rect_y_max.clamp(self.freq_bounds.0, self.freq_bounds.1);
 
-                            // 使用 Points 绘制矩形背景（用密集点模拟填充）
-                            // let rect_steps = 10;
-                            // for i in 0..rect_steps {
-                            //     let y = rect_y_min + (rect_y_max - rect_y_min) * i as f64 / rect_steps as f64;
-                            //     let bg_line = Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                            //         [rect_x_min, y],
-                            //         [rect_x_max, y],
-                            //     ]))
-                            //         .color(if *is_strong {
-                            //             Color32::from_rgba_unmultiplied(80, 120, 180, 180)
-                            //         } else {
-                            //             Color32::from_rgba_unmultiplied(100, 140, 200, 120)
-                            //         })
-                            //         .width(rect_height as f32 / rect_steps as f32 * 1.2);
-                            //     plot_ui.line(bg_line);
-                            // }
+                            if let Some(PlotPoint { x, y }) = click_pos {
+                                if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max {
+                                    show_candidate_notes = Some(*id);
+                                    miss_click = false;
+                                }
+                            }
+
 
                             // 绘制矩形边框（四条线）
                             let border_color = if *is_strong {
@@ -690,31 +659,6 @@ impl App {
                             } else {
                                 Color32::from_rgb(60, 100, 180)
                             };
-                            let border_width = if *is_strong { 2.5 } else { 1.5 };
-
-                            // // 上边框
-                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                            //     [rect_x_min, rect_y_max],
-                            //     [rect_x_max, rect_y_max],
-                            // ])).color(border_color).width(border_width));
-                            //
-                            // // 下边框
-                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                            //     [rect_x_min, rect_y_min],
-                            //     [rect_x_max, rect_y_min],
-                            // ])).color(border_color).width(border_width));
-                            //
-                            // // 左边框
-                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                            //     [rect_x_min, rect_y_min],
-                            //     [rect_x_min, rect_y_max],
-                            // ])).color(border_color).width(border_width));
-                            //
-                            // // 右边框
-                            // plot_ui.line(Line::new("PlotPoints", PlotPoints::from_iter(vec![
-                            //     [rect_x_max, rect_y_min],
-                            //     [rect_x_max, rect_y_max],
-                            // ])).color(border_color).width(border_width));
 
                             let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
                                 [rect_x_min, rect_y_min],
@@ -727,7 +671,11 @@ impl App {
 
 
                             // 在矩形中心标注音符名称
-                            let label = format!("{}\n{:.1}Hz", note_name, note_freq);
+                            let label = if let Some((name, freq)) = configuration {
+                                format!("{name}\n{freq:.1}Hz\n original\n[{} {:.1}Hz]", note_name, note_freq)
+                            } else {
+                                format!("{}\n{:.1}Hz", note_name, note_freq)
+                            };
                             plot_ui.text(
                                 PlotText::new("PlotPoints",
                                               PlotPoint { x: beat_time + rect_width / 2.0, y: rect_y_center.clamp(self.freq_bounds.0, self.freq_bounds.1) },
@@ -737,6 +685,37 @@ impl App {
                                     .anchor(Align2::CENTER_CENTER)
                                     .name("beat_note"),
                             );
+
+                            if self.cached_notes.configuring == Some(*id) {
+                                let mut y_offset = -rect_height;
+                                let rect_y_min = rect_y_min + rect_height * 0.75;
+                                for (name, freq) in candidates {
+                                    y_offset -= rect_height * 0.3;
+                                    if let Some(PlotPoint { x, y }) = click_pos {
+                                        if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
+                                            note_marks = Some((*id, name.clone(), *freq))
+                                        }
+                                    }
+                                    let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
+                                        [rect_x_min, rect_y_min + y_offset],
+                                        [rect_x_min, rect_y_max + y_offset],
+                                        [rect_x_max, rect_y_max + y_offset],
+                                        [rect_x_max, rect_y_min + y_offset],
+
+                                    ])).fill_color(Color32::from_rgb(255, 0, 0)).stroke(Stroke::new(0.0, border_color));
+                                    plot_ui.polygon(rectangle);
+
+                                    plot_ui.text(
+                                        PlotText::new("PlotPoints",
+                                                      PlotPoint { x: beat_time + rect_width / 2.0, y: y_offset + rect_y_max },
+                                                      name
+                                        )
+                                            .color(Color32::WHITE)
+                                            .anchor(Align2::CENTER_TOP)
+                                            .name("beat_note"),
+                                    );
+                                }
+                            }
                         }
                     }
 
@@ -752,6 +731,10 @@ impl App {
                                 .name("beats"),
                         );
                     }
+                }
+
+                if mouse_click && miss_click && self.cached_notes.configuring.is_some() {
+                    show_candidate_notes = None;
                 }
             }
 
@@ -844,9 +827,132 @@ impl App {
                         .color(Color32::from_rgb(250, 50, 50)),
                 );
             }
+            Configuration {
+                show_candidate_notes,
+                note_marks
+
+            }
         });
+
+        struct Configuration {
+            show_candidate_notes: Option<usize>,
+            note_marks: Option<(usize, String, f64)>,
+        }
+
+        self.cached_notes.configuring = show_candidate_notes.inner.show_candidate_notes;
+        if let Some((id, name, freq)) = show_candidate_notes.inner.note_marks {
+            for b in &mut self.cached_notes.track {
+                if b.id == id {
+                    b.configuration = Some((name.clone(), freq));
+                }
+            }
+        }
+
     }
 }
+
+struct CachedNotes {
+    track: Vec<Beat>,
+    bpm: f64,
+    duration: f64,
+    beats_per_bar: usize,
+    configuring: Option<usize>,
+}
+
+
+struct Beat {
+    id: usize,
+    beat_start: f64,
+    note_name: String,
+    note_freq: f64,
+    is_bar_start: bool,
+    candidates: Vec<(String, f64)>,
+    configuration: Option<(String, f64)>,
+}
+
+impl CachedNotes {
+
+    fn update(&mut self, bpm: f64, duration: f64, track: &[[f64; 2]], tones_track: &[(f32, Vec<(String, f64, f32)>)], beats_per_bar: usize) {
+        if self.bpm != bpm || self.duration != duration || self.beats_per_bar != beats_per_bar {
+            *self = Self::analyze_beat_notes(bpm, duration, track, tones_track, beats_per_bar);
+        }
+    }
+
+
+    // 分析每个节拍的主导音符
+    fn analyze_beat_notes(bpm: f64, duration: f64, track: &[[f64; 2]], tones_track: &[(f32, Vec<(String, f64, f32)>)], beats_per_bar: usize) -> CachedNotes {
+        if bpm <= 0.0 {
+            return CachedNotes {
+                track: vec![],
+                bpm,
+                duration,
+                beats_per_bar,
+                configuring: None,
+            };
+        }
+
+        let beat_duration = 60.0 / bpm;
+        let mut beat_notes = Vec::new();
+
+        let num_beats = (duration / beat_duration).ceil() as usize;
+
+
+
+        for beat_idx in 0..num_beats {
+            let beat_start = beat_idx as f64 * beat_duration;
+            let beat_end = beat_start + beat_duration;
+
+            if beat_start > duration {
+                break;
+            }
+
+            // 收集这个节拍内的所有频率数据
+            let mut freqs_in_beat = Vec::new();
+
+            for point in track {
+                if point[0] >= beat_start && point[0] < beat_end && point[1] > 20.0 {
+                    freqs_in_beat.push(point[1]);
+                }
+            }
+
+            let mut tones = HashMap::new();
+
+            for &(t, ref candidates) in tones_track {
+                if t >= beat_start as f32 && t < beat_end as f32 {
+                    for &(ref note, freq, weight) in candidates {
+                        tones.entry(note).or_insert((freq, 0.0)).1 += weight;
+                    }
+                }
+            }
+
+            let mut sort_vec = tones.iter().collect::<Vec<_>>();
+            sort_vec.sort_by(|a, b| b.1.1.partial_cmp(&a.1.1).unwrap());
+            let candidates = sort_vec.into_iter().take(15).map(|(&k, &(freq, _))| (k.clone(), freq)).collect();
+
+
+
+            if !freqs_in_beat.is_empty() {
+                // 计算中位数频率（比平均值更稳定）
+                freqs_in_beat.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let median_freq = freqs_in_beat[freqs_in_beat.len() / 2];
+
+                let (note_name, note_freq) = nearest_note(median_freq);
+                let is_bar_start = beat_idx % beats_per_bar == 0;
+
+                beat_notes.push(Beat {id: beat_idx, beat_start, note_name, note_freq, is_bar_start, candidates, configuration: Default::default()});
+            }
+        }
+
+        CachedNotes {
+            track: beat_notes,
+            bpm,
+            duration,
+            beats_per_bar,
+            configuring: None,
+        }
+    }
+}
+
 
 fn nearest_note(freq: f64) -> (String, f64) {
     if freq <= 0.0 {
