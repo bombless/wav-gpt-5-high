@@ -19,7 +19,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         std::process::exit(1);
     }
     let wav_path = &args[1];
-    let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(4096);
+    let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2048);
     let hop_size: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(512);
 
     let (mono, sample_rate) = read_wav_mono_f32(wav_path)?;
