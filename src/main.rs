@@ -977,74 +977,79 @@ impl eframe::App for App {
         }
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
-            ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
-                ui.separator();
-                ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
-                ui.separator();
+            ui.vertical(|ui| {
 
-                // 节拍控制
-                ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
-                if self.show_beat_lines {
-                    ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
+                ui.horizontal_wrapped(|ui| {
+                    ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
                     ui.separator();
-                    ui.label("BPM:");
-                    ui.add(egui::DragValue::new(&mut self.bpm)
-                        .speed(1.0)
-                        .range(30.0..=300.0));
-
+                    ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
                     ui.separator();
-                    ui.label("拍号:");
-                    egui::ComboBox::from_id_salt("beats_per_bar")
-                        .selected_text(format!("{}/4", self.beats_per_bar))
-                        .show_ui(ui, |ui| {
-                            ui.selectable_value(&mut self.beats_per_bar, 3, "3/4");
-                            ui.selectable_value(&mut self.beats_per_bar, 4, "4/4");
-                            ui.selectable_value(&mut self.beats_per_bar, 5, "5/4");
-                            ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
-                        });
-                }
-                ui.separator();
 
-                // 播放轨迹选择
-                ui.label("播放轨迹:");
-                let prev_selection = self.selected_track;
-                egui::ComboBox::from_id_salt("track_selector")
-                    .selected_text(self.selected_track.label())
-                    .show_ui(ui, |ui| {
-                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Max, PlaybackTrack::Max.label());
-                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample1, PlaybackTrack::Sample1.label());
-                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample2, PlaybackTrack::Sample2.label());
-                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample3, PlaybackTrack::Sample3.label());
-                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::BeatNotes, PlaybackTrack::BeatNotes.label());  // 新增
-                    });
+                    // 节拍控制
+                    ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
+                    if self.show_beat_lines {
+                        ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
+                        ui.separator();
+                        ui.label("BPM:");
+                        ui.add(egui::DragValue::new(&mut self.bpm)
+                            .speed(1.0)
+                            .range(30.0..=300.0));
 
-                // 如果正在播放时切换轨迹，先停止播放
-                if self.playing && prev_selection != self.selected_track {
-                    self.stop_play();
-                }
-
-                ui.separator();
-                if ui.button(if self.playing { "停止播放" } else { "播放合成音" }).clicked() {
-                    if self.playing {
-                        self.stop_play();
-                    } else {
-                        self.start_play();
+                        ui.separator();
+                        ui.label("拍号:");
+                        egui::ComboBox::from_id_salt("beats_per_bar")
+                            .selected_text(format!("{}/4", self.beats_per_bar))
+                            .show_ui(ui, |ui| {
+                                ui.selectable_value(&mut self.beats_per_bar, 3, "3/4");
+                                ui.selectable_value(&mut self.beats_per_bar, 4, "4/4");
+                                ui.selectable_value(&mut self.beats_per_bar, 5, "5/4");
+                                ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
+                            });
                     }
-                }
-                ui.separator();
-                ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
-                ui.separator();
-                ui.label(format!("时长: {:.3}s", self.duration));
-                ui.separator();
-                ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
-
-                if self.playing {
                     ui.separator();
-                    ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s ({})",
-                                                   self.play_position, self.duration, self.selected_track.label()))
-                        .color(Color32::from_rgb(0, 200, 0)));
-                }
+
+                    // 播放轨迹选择
+                    ui.label("播放轨迹:");
+                    let prev_selection = self.selected_track;
+                    egui::ComboBox::from_id_salt("track_selector")
+                        .selected_text(self.selected_track.label())
+                        .show_ui(ui, |ui| {
+                            ui.selectable_value(&mut self.selected_track, PlaybackTrack::Max, PlaybackTrack::Max.label());
+                            ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample1, PlaybackTrack::Sample1.label());
+                            ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample2, PlaybackTrack::Sample2.label());
+                            ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample3, PlaybackTrack::Sample3.label());
+                            ui.selectable_value(&mut self.selected_track, PlaybackTrack::BeatNotes, PlaybackTrack::BeatNotes.label());  // 新增
+                        });
+
+                    // 如果正在播放时切换轨迹，先停止播放
+                    if self.playing && prev_selection != self.selected_track {
+                        self.stop_play();
+                    }
+
+                    ui.separator();
+                    if ui.button(if self.playing { "停止播放" } else { "播放合成音" }).clicked() {
+                        if self.playing {
+                            self.stop_play();
+                        } else {
+                            self.start_play();
+                        }
+                    }
+                });
+
+                ui.horizontal_wrapped(|ui| {
+                    ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
+                    ui.separator();
+                    ui.label(format!("时长: {:.3}s", self.duration));
+                    ui.separator();
+                    ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
+
+                    if self.playing {
+                        ui.separator();
+                        ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s ({})",
+                                                       self.play_position, self.duration, self.selected_track.label()))
+                            .color(Color32::from_rgb(0, 200, 0)));
+                    }
+                });
             });
         });
 
