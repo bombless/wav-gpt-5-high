@@ -1,11 +1,15 @@
+
+mod color_gemini;
+
 use eframe::egui;
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
-use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b};
+use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRadius, Painter, Pos2, Rect, StrokeKind, Vec2, Window, Shape::LineSegment, FontId};
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::{HashMap, HashSet};
+use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
 
 fn main() -> Result<(), Box<dyn Error>> {
@@ -400,6 +404,7 @@ struct App {
     note_marks: Vec<(f64, String, i32)>,
     tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
 
+    show_pie_chart: bool,
     show_note_lines: bool,
     show_sampled_freqs: bool,
     dense_threshold: usize,
@@ -445,6 +450,7 @@ impl App {
             sampled_track,
             note_marks,
             tones_track,
+            show_pie_chart: false,
             show_note_lines: true,
             show_sampled_freqs: true,
             dense_threshold: 36,
@@ -759,7 +765,7 @@ impl App {
                             if self.cached_notes.configuring == Some(*id) {
                                 let mut y_offset = -rect_height;
                                 let rect_y_min = rect_y_min + rect_height * 0.75;
-                                for (name, freq) in candidates {
+                                for (name, freq, _) in candidates {
                                     y_offset -= rect_height * 0.3;
                                     if let Some(PlotPoint { x, y }) = click_pos {
                                         if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
@@ -866,7 +872,7 @@ struct Beat {
     note_name: String,
     note_freq: f64,
     is_bar_start: bool,
-    candidates: Vec<(String, f64)>,
+    candidates: Vec<(String, f64, f32)>,
     configuration: Option<(String, f64)>,
 }
 
@@ -927,7 +933,7 @@ impl CachedNotes {
 
             let mut sort_vec = tones.iter().collect::<Vec<_>>();
             sort_vec.sort_by(|a, b| b.1.1.partial_cmp(&a.1.1).unwrap());
-            let candidates = sort_vec.into_iter().take(15).map(|(&k, &(freq, _))| (k.clone(), freq)).collect();
+            let candidates = sort_vec.into_iter().take(15).map(|(&k, &(freq, w))| (k.clone(), freq, w)).collect();
 
 
 
@@ -968,6 +974,69 @@ fn nearest_note(freq: f64) -> (String, f64) {
     (name, f)
 }
 
+
+fn draw_pie_chart(painter: &Painter,
+                   data: &[(String, f32, Color32)],
+                   center: Pos2,
+                   radius: f32) {
+    let monospace_font = FontId::monospace(10.0);
+
+    let total: f32 = data.iter().map(|(_, x, _)| *x).sum();
+
+    let line_height = FontId::default().size;
+
+    let center = center + vec2(0.0, line_height);
+
+    let mut start_angle = -PI / 2.0;
+
+    let mut label_height_offset = line_height;
+
+    let mut cases_square_end = None;
+
+    for (name, value, color) in data {
+        let sweep = value / total * 2.0f32 * PI;
+
+        let mut points = vec![center];
+        for i in 0..=200 {
+            let angle: f32 = start_angle + sweep * (i as f32 / 200.0);
+            let point = center + radius * Vec2::new(angle.cos(), angle.sin());
+            points.push(point);
+        }
+        points.push(center);  // 闭合路径
+
+        painter.add(PathShape::convex_polygon(
+            points,
+            *color,
+            Stroke::new(1.0, Color32::BLACK),
+        ));
+
+
+        if value / total >= 0.1 {
+            let label_angle = start_angle + sweep / 2.0;
+            let mut label_pos = center + (radius * 1.3) * Vec2::new(label_angle.cos(), label_angle.sin());
+            label_pos.y = label_pos.y.clamp(center.y - radius - line_height, center.y + radius + line_height);
+            painter.text(label_pos, Align2::CENTER_CENTER, name, monospace_font.clone(), Color32::BLACK);
+
+        } else if value / total >= 0.01 {
+
+            painter.add(LineSegment {points: [pos2(center.x - radius, center.y + (radius * 1.3) + label_height_offset), pos2(center.x, center.y + (radius * 1.3) + label_height_offset)], stroke: Stroke::new(10.0, *color)});
+            painter.text(pos2(center.x + line_height, center.y + (radius * 1.3) + label_height_offset), Align2::LEFT_CENTER, name, monospace_font.clone(), Color32::BLACK);
+            label_height_offset += line_height;
+
+            cases_square_end = Some(label_height_offset)
+        }
+
+        start_angle += sweep;
+    }
+
+    if let Some(square_end) = cases_square_end {
+        let rect = Rect { min: pos2(center.x - radius - line_height, center.y + (radius * 1.3)), max: pos2(center.x + radius + line_height, center.y + (radius * 1.3) + square_end) };
+        painter.add(RectShape::new(rect, CornerRadius::ZERO, Color32::TRANSPARENT, Stroke::new(1.0, Color32::BLACK), StrokeKind::Middle));
+
+    }
+
+}
+
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
         self.update_play_position();
@@ -978,6 +1047,8 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
+                ui.checkbox(&mut self.show_pie_chart, "显示频率图");
+                ui.separator();
                 ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
                 ui.separator();
                 ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
@@ -1049,6 +1120,33 @@ impl eframe::App for App {
                 }
             });
         });
+
+        if self.show_pie_chart {
+            Window::new("频率图").fade_in(true).collapsible(false).scroll([true, true]).show(ctx, |ui| {
+                let mut data = Vec::new();
+                let mut iter = color_gemini::ColorIterator::default();
+                if let Some(Beat {candidates, ..}) = self.cached_notes.track.iter().find(|Beat {beat_start, ..}| self.play_position <= *beat_start) {
+                    let candidates = candidates.iter().filter(|(_, _, w)| *w > 0.0001).collect::<Vec<_>>();
+                    // ui.label(format!("ratio{}\n{candidates:?}", candidates[0].2 / candidates[1].2));
+                    for (name, freq, weight) in candidates {
+                        let (r, g, b) = iter.next().unwrap();
+                        let color = Color32::from_rgb(r, g, b);
+                        data.push((format!("{name:<5} {freq:>6.1}Hz"), *weight, color));
+                    }
+                    let painter = ui.painter();
+                    let cursor = ui.cursor();
+                    let half_length = ui.available_height().min(ui.available_width()) * 0.5;
+                    let y_diff = if ui.available_height() < ui.available_width() {
+                        0.0
+                    } else {
+                        ui.available_height() - ui.available_width()
+                    };
+                    let radius = half_length * 0.6;
+
+                    draw_pie_chart(painter, &data, cursor.left_top() + vec2(half_length, half_length - y_diff * 0.5), radius);
+                }
+            });
+        }
 
         egui::CentralPanel::default().show(ctx, |ui| {
             self.draw_plot(ui);
