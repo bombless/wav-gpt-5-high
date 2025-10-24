@@ -714,6 +714,8 @@ impl App {
                         .width(width);
                     plot_ui.vline(beat_line);
 
+
+
                     // 绘制节拍音符标注框
                     if self.show_beat_notes {
                         if let Some(Beat { id, note_name, note_freq, is_bar_start: is_strong, configuration, candidates, ..}) = self.cached_notes.track.iter()
@@ -724,89 +726,97 @@ impl App {
                             let rect_height = 0.08 * y_span;
                             let rect_width = beat_duration * 0.8;
 
-                            // 矩形的四个角
-                            let rect_x_min = beat_time;
-                            let rect_x_max = beat_time + rect_width;
-                            let rect_y_min = rect_y_center - rect_height / 2.0;
-                            let rect_y_max = rect_y_center + rect_height / 2.0;
+                            let rect = plot_ui.transform().rect_from_values(&PlotPoint {x: 0.0, y: 0.0}, &PlotPoint {x: rect_width, y: rect_height});
+
+                            // 如果不够空间画音调就放弃不画了
+
+                            if rect.right() - rect.left() > FontId::default().size * 5.0 {
+
+                                // 矩形的四个角
+                                let rect_x_min = beat_time;
+                                let rect_x_max = beat_time + rect_width;
+                                let rect_y_min = rect_y_center - rect_height / 2.0;
+                                let rect_y_max = rect_y_center + rect_height / 2.0;
 
 
-                            let rect_x_min = rect_x_min.clamp(self.time_bounds.0, self.time_bounds.1);
-                            let rect_x_max = rect_x_max.clamp(self.time_bounds.0, self.time_bounds.1);
-                            let rect_y_min = rect_y_min.clamp(self.freq_bounds.0, self.freq_bounds.1);
-                            let rect_y_max = rect_y_max.clamp(self.freq_bounds.0, self.freq_bounds.1);
+                                let rect_x_min = rect_x_min.clamp(self.time_bounds.0, self.time_bounds.1);
+                                let rect_x_max = rect_x_max.clamp(self.time_bounds.0, self.time_bounds.1);
+                                let rect_y_min = rect_y_min.clamp(self.freq_bounds.0, self.freq_bounds.1);
+                                let rect_y_max = rect_y_max.clamp(self.freq_bounds.0, self.freq_bounds.1);
 
-                            if let Some(PlotPoint { x, y }) = click_pos {
-                                if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max {
-                                    show_candidate_notes = Some(*id);
-                                    miss_click = false;
-                                }
-                            }
-
-
-                            // 绘制矩形边框（四条线）
-                            let border_color = if *is_strong {
-                                Color32::from_rgb(40, 80, 160)
-                            } else {
-                                Color32::from_rgb(60, 100, 180)
-                            };
-
-                            let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
-                                [rect_x_min, rect_y_min],
-                                [rect_x_min, rect_y_max],
-                                [rect_x_max, rect_y_max],
-                                [rect_x_max, rect_y_min],
-
-                            ])).fill_color(border_color).stroke(Stroke::new(0.0, border_color));
-                            plot_ui.polygon(rectangle);
-
-
-                            // 在矩形中心标注音符名称
-                            let label = if let Some((name, freq)) = configuration {
-                                format!("{name}\n{freq:.1}Hz\n original\n[{} {:.1}Hz]", note_name, note_freq)
-                            } else {
-                                format!("{}\n{:.1}Hz", note_name, note_freq)
-                            };
-                            plot_ui.text(
-                                PlotText::new("PlotPoints",
-                                              PlotPoint { x: beat_time + rect_width / 2.0, y: rect_y_center.clamp(self.freq_bounds.0, self.freq_bounds.1) },
-                                              label
-                                )
-                                    .color(Color32::WHITE)
-                                    .anchor(Align2::CENTER_CENTER)
-                                    .name("beat_note"),
-                            );
-
-                            if self.cached_notes.configuring == Some(*id) {
-                                let mut y_offset = -rect_height;
-                                let rect_y_min = rect_y_min + rect_height * 0.75;
-                                for (name, freq, _) in candidates {
-                                    y_offset -= rect_height * 0.3;
-                                    if let Some(PlotPoint { x, y }) = click_pos {
-                                        if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
-                                            note_marks = Some((*id, name.clone(), *freq))
-                                        }
+                                if let Some(PlotPoint { x, y }) = click_pos {
+                                    if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max {
+                                        show_candidate_notes = Some(*id);
+                                        miss_click = false;
                                     }
-                                    let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
-                                        [rect_x_min, rect_y_min + y_offset],
-                                        [rect_x_min, rect_y_max + y_offset],
-                                        [rect_x_max, rect_y_max + y_offset],
-                                        [rect_x_max, rect_y_min + y_offset],
+                                }
 
-                                    ])).fill_color(Color32::from_rgb(255, 0, 0)).stroke(Stroke::new(0.0, border_color));
-                                    plot_ui.polygon(rectangle);
 
-                                    plot_ui.text(
-                                        PlotText::new("PlotPoints",
-                                                      PlotPoint { x: beat_time + rect_width / 2.0, y: y_offset + rect_y_max },
-                                                      name
-                                        )
-                                            .color(Color32::WHITE)
-                                            .anchor(Align2::CENTER_TOP)
-                                            .name("beat_note"),
-                                    );
+                                // 绘制矩形边框（四条线）
+                                let border_color = if *is_strong {
+                                    Color32::from_rgb(40, 80, 160)
+                                } else {
+                                    Color32::from_rgb(60, 100, 180)
+                                };
+
+                                let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
+                                    [rect_x_min, rect_y_min],
+                                    [rect_x_min, rect_y_max],
+                                    [rect_x_max, rect_y_max],
+                                    [rect_x_max, rect_y_min],
+
+                                ])).fill_color(border_color).stroke(Stroke::new(0.0, border_color));
+                                plot_ui.polygon(rectangle);
+
+
+                                // 在矩形中心标注音符名称
+                                let label = if let Some((name, freq)) = configuration {
+                                    format!("{name}\n{freq:.1}Hz\n original\n[{} {:.1}Hz]", note_name, note_freq)
+                                } else {
+                                    format!("{}\n{:.1}Hz", note_name, note_freq)
+                                };
+                                plot_ui.text(
+                                    PlotText::new("PlotPoints",
+                                                  PlotPoint { x: beat_time + rect_width / 2.0, y: rect_y_center.clamp(self.freq_bounds.0, self.freq_bounds.1) },
+                                                  label
+                                    )
+                                        .color(Color32::WHITE)
+                                        .anchor(Align2::CENTER_CENTER)
+                                        .name("beat_note"),
+                                );
+
+                                if self.cached_notes.configuring == Some(*id) {
+                                    let mut y_offset = -rect_height;
+                                    let rect_y_min = rect_y_min + rect_height * 0.75;
+                                    for (name, freq, _) in candidates {
+                                        y_offset -= rect_height * 0.3;
+                                        if let Some(PlotPoint { x, y }) = click_pos {
+                                            if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
+                                                note_marks = Some((*id, name.clone(), *freq))
+                                            }
+                                        }
+                                        let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
+                                            [rect_x_min, rect_y_min + y_offset],
+                                            [rect_x_min, rect_y_max + y_offset],
+                                            [rect_x_max, rect_y_max + y_offset],
+                                            [rect_x_max, rect_y_min + y_offset],
+
+                                        ])).fill_color(Color32::from_rgb(255, 0, 0)).stroke(Stroke::new(0.0, border_color));
+                                        plot_ui.polygon(rectangle);
+
+                                        plot_ui.text(
+                                            PlotText::new("PlotPoints",
+                                                          PlotPoint { x: beat_time + rect_width / 2.0, y: y_offset + rect_y_max },
+                                                          name
+                                            )
+                                                .color(Color32::WHITE)
+                                                .anchor(Align2::CENTER_TOP)
+                                                .name("beat_note"),
+                                        );
+                                    }
                                 }
                             }
+
                         }
                     }
 
