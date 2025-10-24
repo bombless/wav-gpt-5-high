@@ -2,8 +2,6 @@
 mod color_gemini;
 mod music;
 
-use music::*;
-
 use eframe::egui;
 use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
 use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRadius, Painter, Pos2, Rect, StrokeKind, Vec2, Window, Shape::LineSegment, FontId};
@@ -61,11 +59,11 @@ fn main() -> Result<(), Box<dyn Error>> {
     let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2048);
     let hop_size: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(512);
 
-    let (mono, sample_rate) = read_wav_mono_f32(wav_path)?;
+    let (mono, sample_rate) = music::read_wav_mono_f32(wav_path)?;
     let sr_in = sample_rate as f32;
     let duration = mono.len() as f32 / sr_in;
 
-    let (track, sampled_track, tones_track) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
+    let (track, sampled_track, tones_track) = music::dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
     let f_max = sr_in / 2.0;
 
     // 准备 App 状态
@@ -89,7 +87,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .map(|(t, freqs)| (*t as f64, [freqs[0] as f64, freqs[1] as f64, freqs[2] as f64]))
             .collect(),
-        equal_temperament_marks(20.0, f_max)
+        music::equal_temperament_marks(20.0, f_max)
             .into_iter()
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
@@ -150,7 +148,7 @@ struct App {
     sampled_track: Vec<(f64, [f64; 3])>,
     note_marks: Vec<(f64, String, i32)>,
     tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
-    cached_notes: CachedNotes,
+    cached_notes: music::CachedNotes,
 
     show_pie_chart: bool,
     show_note_lines: bool,
@@ -215,7 +213,7 @@ impl App {
             duration,
             time_bounds: (0.0, duration.max(1e-6)),
             freq_bounds: (0.0, f_max.max(1.0)),
-            cached_notes: CachedNotes::analyze_beat_notes(120.0, duration, &track, &tones_track, 4),
+            cached_notes: music::CachedNotes::analyze_beat_notes(120.0, duration, &track, &tones_track, 4),
             original,
             track,
             sampled_track,
@@ -279,14 +277,14 @@ impl App {
         let synth = if self.selected_track == PlaybackTrack::BeatNotes {
             // 播放节拍音符
             self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
-            synth_beat_notes(&*self.cached_notes.track, sr_out, self.duration as f32, 0.3, beat_duration)
+            music::synth_beat_notes(&*self.cached_notes.track, sr_out, self.duration as f32, 0.3, beat_duration)
         } else if self.selected_track == PlaybackTrack::Original {
             sr_out = self.original.0;
             self.original.1.clone()
         } else {
             // 播放连续频率轨迹
             let track_data = self.get_selected_track_data().unwrap();
-            synth_sine_from_track(&track_data, sr_out, self.duration as f32, 0.25)
+            music::synth_sine_from_track(&track_data, sr_out, self.duration as f32, 0.25)
         };
 
         self.play_position = if !self.play_from_start && self.play_position > 0.0 {
@@ -526,8 +524,8 @@ impl App {
 
                     // 绘制节拍音符标注框
                     if self.show_beat_notes {
-                        if let Some(Beat { id, note_name, note_freq, is_bar_start: is_strong, configuration, candidates, ..}) = self.cached_notes.track.iter()
-                            .find(|Beat { beat_start: t, ..}| (*t - beat_time).abs() < beat_duration * 0.1) {
+                        if let Some(music::Beat { id, note_name, note_freq, is_bar_start: is_strong, configuration, candidates, ..}) = self.cached_notes.track.iter()
+                            .find(|music::Beat { beat_start: t, ..}| (*t - beat_time).abs() < beat_duration * 0.1) {
 
                             // 矩形位置：在图表顶部
                             let rect_y_center = bounds.max()[1] - 0.05 * y_span;
@@ -648,7 +646,7 @@ impl App {
 
             // 鼠标坐标提示
             if let Some(pointer) = plot_ui.pointer_coordinate() {
-                let (name, f_note) = nearest_note(pointer.y);
+                let (name, f_note) = music::nearest_note(pointer.y);
                 let txt = format!("最近音: {name} ≈ {:.1}Hz", f_note);
                 plot_ui.text(
                     PlotText::new("鼠标坐标提示", PlotPoint {x: pointer.x.clamp(self.time_bounds.0, self.time_bounds.1), y: pointer.y.clamp(self.freq_bounds.0, self.freq_bounds.1)}, txt)
@@ -872,7 +870,7 @@ impl eframe::App for App {
             Window::new("频率图").fade_in(true).collapsible(false).scroll([true, true]).show(ctx, |ui| {
                 let mut data = Vec::new();
                 let mut iter = color_gemini::ColorIterator::default();
-                if let Some(Beat {candidates, ..}) = self.cached_notes.track.iter().find(|Beat {beat_start, ..}| self.play_position <= *beat_start) {
+                if let Some(music::Beat {candidates, ..}) = self.cached_notes.track.iter().find(|music::Beat {beat_start, ..}| self.play_position <= *beat_start) {
                     let candidates = candidates.iter().filter(|(_, _, w)| *w > 0.0001).collect::<Vec<_>>();
                     // ui.label(format!("ratio{}\n{candidates:?}", candidates[0].2 / candidates[1].2));
                     for (name, freq, weight) in candidates {
