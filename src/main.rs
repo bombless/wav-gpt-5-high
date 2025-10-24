@@ -61,7 +61,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .collect(),
         tones_track,
         sr_out,
-        duration as f64,
     );
 
     let native_options = eframe::NativeOptions {
@@ -441,7 +440,6 @@ impl App {
         note_marks: Vec<(f64, String, i32)>,
         tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
         sr_out: u32,
-        _total_duration: f64,
     ) -> Self {
         Self {
             file_name,
