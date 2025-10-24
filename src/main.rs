@@ -558,21 +558,14 @@ impl App {
             return;
         }
 
-        if !self.play_from_start && self.play_position > 0.0 && let Some(sink) = &self.sink {
-            self.play_start_time = Instant::now().checked_sub(Duration::from_millis((self.play_position * 1000.0) as u64));
-            sink.play();
-            self.playing = true;
-            return;
-        }
-
 
         let mut sr_out = 44_100u32;
+        let beat_duration = 60.0 / self.bpm;
 
         // 根据选择的轨迹类型生成音频
         let synth = if self.selected_track == PlaybackTrack::BeatNotes {
             // 播放节拍音符
             self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
-            let beat_duration = 60.0 / self.bpm;
             synth_beat_notes(&*self.cached_notes.track, sr_out, self.duration as f32, 0.3, beat_duration)
         } else if self.selected_track == PlaybackTrack::Original {
             sr_out = self.original.0;
@@ -582,6 +575,33 @@ impl App {
             let track_data = self.get_selected_track_data().unwrap();
             synth_sine_from_track(&track_data, sr_out, self.duration as f32, 0.25)
         };
+
+        self.play_position = if !self.play_from_start && self.play_position > 0.0 {
+            let mut position = 0.0;
+            let step = beat_duration;
+            loop {
+                if position + step >= self.play_position {
+                    break position
+                }
+                position += step;
+            }
+        } else {
+            0.0
+        };
+
+        let skip_samples = if self.play_position > 0.0 {
+            let mut skip_samples = 0;
+            loop {
+                if skip_samples as f64 / sr_out as f64 * beat_duration > self.play_position {
+                    break skip_samples
+                }
+                skip_samples += 1;
+            }
+        } else {
+            0
+        };
+
+        let synth = if skip_samples > 0 { synth.into_iter().skip(skip_samples).collect::<Vec<_>>() } else { synth };
 
         if synth.is_empty() {
             return;
@@ -602,17 +622,16 @@ impl App {
                 sink.play();
                 self.sink = Some(sink);
                 self.playing = true;
-                self.play_start_time = Some(Instant::now());
-                self.play_position = 0.0;
+                self.play_start_time = Instant::now().checked_sub(Duration::from_millis((self.play_position * 1000.0) as u64));
             }
         }
     }
 
     fn stop_play(&mut self) {
         if let Some(sink) = &self.sink {
-            sink.pause();
+            sink.stop();
         }
-        // self.sink = None;
+        self.sink = None;
         self.playing = false;
         self.play_start_time = None;
         // self.play_position = 0.0;
