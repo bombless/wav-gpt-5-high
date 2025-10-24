@@ -305,7 +305,7 @@ impl App {
         let skip_samples = if self.play_position > 0.0 {
             let mut skip_samples = 0;
             loop {
-                if skip_samples as f64 / sr_out as f64 * beat_duration > self.play_position {
+                if skip_samples as f64 / sr_out as f64 > self.play_position {
                     break skip_samples
                 }
                 skip_samples += 1;
