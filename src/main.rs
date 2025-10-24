@@ -1108,6 +1108,7 @@ impl eframe::App for App {
 
                 // 节拍控制
                 ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
+                ui.separator();
                 ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
                 if self.show_beat_lines || self.show_beat_notes {
                     ui.separator();
@@ -1163,14 +1164,10 @@ impl eframe::App for App {
                 ui.separator();
                 ui.label(format!("时长: {:.3}s", self.duration));
 
-
-                let msg = format!(
-                    "fps_frame_gap {:.1}Hz fps_frame_count {:.1}Hz",
-                    self.fps_frame_gap,
-                    self.fps_frame_count,
-                );
                 ui.separator();
-                ui.label(msg);
+                ui.label(format!("fps_frame_gap {:.1}Hz", self.fps_frame_gap));
+                ui.separator();
+                ui.label(format!("fps_frame_count {:.1}Hz", self.fps_frame_count));
 
                 if self.playing {
                     ui.separator();
