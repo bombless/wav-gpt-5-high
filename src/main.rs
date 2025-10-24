@@ -414,7 +414,7 @@ struct App {
     bpm: f64,
     show_beat_lines: bool,
     beats_per_bar: usize,
-    show_beat_notes: bool,  // 新增：是否显示节拍音符标注
+    show_beat_notes: bool,  // 是否显示节拍音符标注
 
     selected_track: PlaybackTrack,
     stream: Option<OutputStream>,
@@ -677,7 +677,7 @@ impl App {
 
 
             // 节拍线和音符标注
-            if self.show_beat_lines && self.bpm > 0.0 {
+            if (self.show_beat_lines || self.show_beat_notes) && self.bpm > 0.0 {
                 let beat_duration = 60.0 / self.bpm;
                 let bounds = plot_ui.plot_bounds();
                 let y_span = bounds.max()[1] - bounds.min()[1];
@@ -700,19 +700,36 @@ impl App {
                         break;
                     }
 
-                    let is_bar_start = beat_num as usize % self.beats_per_bar == 0;
+                    if self.show_beat_lines {
 
-                    // 绘制节拍线
-                    let (color, width) = if is_bar_start {
-                        (Color32::from_rgb(0, 100, 200), 2.0)
-                    } else {
-                        (Color32::from_rgba_unmultiplied(100, 150, 255, 150), 1.0)
-                    };
+                        let is_bar_start = beat_num as usize % self.beats_per_bar == 0;
 
-                    let beat_line = VLine::new("beat_time", beat_time)
-                        .color(color)
-                        .width(width);
-                    plot_ui.vline(beat_line);
+                        // 绘制节拍线
+                        let (color, width) = if is_bar_start {
+                            (Color32::from_rgb(0, 100, 200), 2.0)
+                        } else {
+                            (Color32::from_rgba_unmultiplied(100, 150, 255, 150), 1.0)
+                        };
+
+                        let beat_line = VLine::new("beat_time", beat_time)
+                            .color(color)
+                            .width(width);
+                        plot_ui.vline(beat_line);
+
+
+                        // 小节编号标签（在底部）
+                        if is_bar_start {
+                            let bar_num = beat_num as usize / self.beats_per_bar + 1;
+                            let label = format!("小节 {}", bar_num);
+                            let label_y = bounds.min()[1] + 0.02 * y_span;
+                            plot_ui.text(
+                                PlotText::new("小节编号", PlotPoint { x: beat_time.clamp(self.time_bounds.0, self.time_bounds.1), y: label_y.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
+                                    .color(Color32::from_rgb(0, 100, 200))
+                                    .anchor(Align2([Align::Min, Align::Min])),
+                            );
+                        }
+                    }
+
 
 
 
@@ -821,18 +838,9 @@ impl App {
                         }
                     }
 
-                    // 小节编号标签（在底部）
-                    if is_bar_start {
-                        let bar_num = beat_num as usize / self.beats_per_bar + 1;
-                        let label = format!("小节 {}", bar_num);
-                        let label_y = bounds.min()[1] + 0.02 * y_span;
-                        plot_ui.text(
-                            PlotText::new("小节编号", PlotPoint { x: beat_time.clamp(self.time_bounds.0, self.time_bounds.1), y: label_y.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
-                                .color(Color32::from_rgb(0, 100, 200))
-                                .anchor(Align2([Align::Min, Align::Min])),
-                        );
-                    }
                 }
+
+
 
                 if mouse_click && miss_click && self.cached_notes.configuring.is_some() {
                     show_candidate_notes = None;
@@ -1099,8 +1107,8 @@ impl eframe::App for App {
 
                 // 节拍控制
                 ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
-                if self.show_beat_lines {
-                    ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
+                ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
+                if self.show_beat_lines || self.show_beat_notes {
                     ui.separator();
                     ui.label("BPM:");
                     ui.add(egui::DragValue::new(&mut self.bpm)
