@@ -765,7 +765,7 @@ impl App {
                                     [rect_x_max, rect_y_max],
                                     [rect_x_max, rect_y_min],
 
-                                ])).fill_color(border_color).stroke(Stroke::new(0.0, border_color));
+                                ])).fill_color(border_color).stroke(Stroke::new(0.0, border_color)).name("");
                                 plot_ui.polygon(rectangle);
 
 
@@ -781,7 +781,9 @@ impl App {
                                                   label
                                     )
                                         .color(Color32::WHITE)
-                                        .anchor(Align2::CENTER_CENTER),
+                                        .anchor(Align2::CENTER_CENTER)
+                                        .name(""),
+
                                 );
 
                                 if self.cached_notes.configuring == Some(*id) {
