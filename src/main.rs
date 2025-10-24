@@ -711,9 +711,10 @@ impl App {
                             (Color32::from_rgba_unmultiplied(100, 150, 255, 150), 1.0)
                         };
 
-                        let beat_line = VLine::new("beat_time", beat_time)
+                        let beat_line = VLine::new("节拍线", beat_time)
                             .color(color)
-                            .width(width);
+                            .width(width)
+                            .name("");
                         plot_ui.vline(beat_line);
 
 
