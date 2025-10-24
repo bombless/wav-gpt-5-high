@@ -618,10 +618,11 @@ impl App {
                     let is_c4 = *midi == 60;
                     let show_label = if dense { is_c || is_a4 || is_c4 } else { true };
 
-                    let mut line = HLine::new("show_note_lines", *f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90));
-                    if is_c4 {
-                        line = HLine::new("show_note_lines", *f).color(Color32::from_rgb(25, 130, 196));
-                    }
+                    let line = if is_c4 {
+                        HLine::new("", *f).color(Color32::from_rgb(25, 130, 196))
+                    } else {
+                        HLine::new("", *f).color(Color32::from_rgba_unmultiplied(120, 140, 200, 90))
+                    };
                     plot_ui.hline(line);
 
                     if show_label {
@@ -631,10 +632,9 @@ impl App {
                             format!("{name} {:.1}Hz", f)
                         };
                         plot_ui.text(
-                            PlotText::new("show_note_lines", PlotPoint {x: label_x.clamp(self.time_bounds.0, self.time_bounds.1), y: f.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
+                            PlotText::new("", PlotPoint {x: label_x.clamp(self.time_bounds.0, self.time_bounds.1), y: f.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
                                 .color(Color32::from_rgb(70, 70, 110))
-                                .anchor(Align2([Align::Min, Align::Center]))
-                                .name("notes"),
+                                .anchor(Align2([Align::Min, Align::Center])),
                         );
                     }
                 }
