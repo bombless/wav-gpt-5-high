@@ -676,17 +676,24 @@ impl App {
                 }
             });
 
-        let mouse_click = ui.input(|i| {
-            i.pointer.any_click()
+        let (ctrl, mouse_click) = ui.input(|i| {
+            (i.modifiers.ctrl, i.pointer.any_click())
         });
+
 
         self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
 
         let configuration = plot.show(ui, |plot_ui| {
 
+
+
             let mut editing_beat_id = self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
             let mut chosen_note = None; // 在音符备选列表中选中哪一个音符
+            let mut set_play_position = None;
 
+            if ctrl && let Some(pos) = plot_ui.pointer_coordinate() {
+                set_play_position = Some(pos.x);
+            }
 
             // 十二平均律水平线
             if self.show_note_lines {
@@ -953,12 +960,14 @@ impl App {
             Configuration {
                 editing_beat_id,
                 chosen_note,
+                set_play_position,
             }
         });
 
         struct Configuration {
             editing_beat_id: Option<usize>,
             chosen_note: Option<(usize, String, f64)>,
+            set_play_position: Option<f64>,
         }
 
         self.cached_notes.configuring = if self.show_beat_notes { configuration.inner.editing_beat_id } else { None };
@@ -968,6 +977,9 @@ impl App {
                     b.configuration = Some((name.clone(), freq));
                 }
             }
+        }
+        if !self.playing && let Some(position) = configuration.inner.set_play_position {
+            self.play_position = position;
         }
 
     }
