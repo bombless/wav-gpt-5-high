@@ -759,7 +759,7 @@ impl App {
                                     Color32::from_rgb(60, 100, 180)
                                 };
 
-                                let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
+                                let rectangle = Polygon::new("音符名称", PlotPoints::from(vec![
                                     [rect_x_min, rect_y_min],
                                     [rect_x_min, rect_y_max],
                                     [rect_x_max, rect_y_max],
@@ -776,13 +776,12 @@ impl App {
                                     format!("{}\n{:.1}Hz", note_name, note_freq)
                                 };
                                 plot_ui.text(
-                                    PlotText::new("PlotPoints",
+                                    PlotText::new("音符名称",
                                                   PlotPoint { x: beat_time + rect_width / 2.0, y: rect_y_center.clamp(self.freq_bounds.0, self.freq_bounds.1) },
                                                   label
                                     )
                                         .color(Color32::WHITE)
-                                        .anchor(Align2::CENTER_CENTER)
-                                        .name("beat_note"),
+                                        .anchor(Align2::CENTER_CENTER),
                                 );
 
                                 if self.cached_notes.configuring == Some(*id) {
@@ -826,10 +825,9 @@ impl App {
                         let label = format!("小节 {}", bar_num);
                         let label_y = bounds.min()[1] + 0.02 * y_span;
                         plot_ui.text(
-                            PlotText::new("beats", PlotPoint { x: beat_time.clamp(self.time_bounds.0, self.time_bounds.1), y: label_y.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
+                            PlotText::new("小节编号", PlotPoint { x: beat_time.clamp(self.time_bounds.0, self.time_bounds.1), y: label_y.clamp(self.freq_bounds.0, self.freq_bounds.1) }, label)
                                 .color(Color32::from_rgb(0, 100, 200))
-                                .anchor(Align2([Align::Min, Align::Min]))
-                                .name("beats"),
+                                .anchor(Align2([Align::Min, Align::Min])),
                         );
                     }
                 }
