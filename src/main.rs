@@ -653,8 +653,7 @@ impl App {
 
             // 播放位置竖线
             if self.play_position > 0.0 {
-                let play_line = VLine::new("播放位置竖线", self.play_position)
-                    .name(format!("播放位置: {:.2}s", self.play_position))
+                let play_line = VLine::new("播放位置", self.play_position)
                     .color(Color32::from_rgba_unmultiplied(0, 255, 0, 200))
                     .width(2.0);
                 plot_ui.vline(play_line);
