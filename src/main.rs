@@ -748,7 +748,7 @@ impl App {
 
                             // 如果不够空间画音调就放弃不画了
 
-                            if rect.right() - rect.left() > FontId::default().size * 5.0 {
+                            if rect.right() - rect.left() > FontId::default().size * 3.0 {
 
                                 // 矩形的四个角
                                 let rect_x_min = beat_time;
