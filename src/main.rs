@@ -31,7 +31,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let duration = mono.len() as f32 / sr_in;
 
     let (track, sampled_track, tones_track) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
-    let fmax = sr_in / 2.0;
+    let f_max = sr_in / 2.0;
 
     // 准备 App 状态
     let file_name = Path::new(wav_path)
@@ -44,7 +44,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let app = App::new(
         file_name,
         duration as f64,
-        fmax as _,
+        f_max as _,
         (sample_rate, mono),
         track
             .iter()
@@ -54,7 +54,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .iter()
             .map(|(t, freqs)| (*t as f64, [freqs[0] as f64, freqs[1] as f64, freqs[2] as f64]))
             .collect(),
-        equal_temperament_marks(20.0, fmax as f32)
+        equal_temperament_marks(20.0, f_max)
             .into_iter()
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
@@ -219,12 +219,12 @@ fn dominant_frequency_track(
     Ok((track, sampled_track, tones_track))
 }
 
-fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
+fn equal_temperament_marks(f_min: f32, f_max: f32) -> Vec<(f32, String, i32)> {
     let names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
     let mut v = Vec::new();
     for midi in 0..=127 {
         let f = 440.0 * 2f32.powf((midi as f32 - 69.0) / 12.0);
-        if f >= fmin && f <= fmax {
+        if f >= f_min && f <= f_max {
             let pc = (midi % 12) as usize;
             let octave = (midi / 12) - 1;
             let name = format!("{}{}", names[pc], octave);
@@ -304,15 +304,19 @@ fn synth_beat_notes(
     }
 
     // 整体淡入淡出
-    let fade = (0.02 * sr_out_f) as usize;
-    for i in 0..fade.min(y.len()) {
-        let g = i as f32 / fade as f32;
-        y[i] *= g;
-        let j = y.len() - 1 - i;
-        y[j] *= g;
-    }
+    let fade_length = (0.02 * sr_out_f) as usize;
+    fade(fade_length, &mut y);
 
     y
+}
+
+fn fade(fade_length: usize, buffer: &mut [f32]) {
+    for i in 0..fade_length.min(buffer.len()) {
+        let g = i as f32 / fade_length as f32;
+        buffer[i] *= g;
+        let j = buffer.len() - 1 - i;
+        buffer[j] *= g;
+    }
 }
 
 fn synth_sine_from_track(
@@ -359,13 +363,8 @@ fn synth_sine_from_track(
         y.push(amp * phase.sin());
     }
 
-    let fade = (0.02 * sr_out_f) as usize;
-    for i in 0..fade.min(y.len()) {
-        let g = i as f32 / fade as f32;
-        y[i] *= g;
-        let j = y.len() - 1 - i;
-        y[j] *= g;
-    }
+    let fade_length = (0.02 * sr_out_f) as usize;
+    fade(fade_length, &mut y);
 
     y
 }
@@ -436,7 +435,7 @@ impl App {
     fn new(
         file_name: String,
         duration: f64,
-        fmax: f64,
+        f_max: f64,
         original: (u32, Vec<f32>),
         track: Vec<[f64; 2]>,
         sampled_track: Vec<(f64, [f64; 3])>,
@@ -447,7 +446,7 @@ impl App {
             file_name,
             duration,
             time_bounds: (0.0, duration.max(1e-6)),
-            freq_bounds: (0.0, fmax.max(1.0)),
+            freq_bounds: (0.0, f_max.max(1.0)),
             cached_notes: CachedNotes::analyze_beat_notes(120.0, duration, &track, &tones_track, 4),
             original,
             track,
@@ -610,7 +609,7 @@ impl App {
                 let dense = self.note_marks.len() > self.dense_threshold;
                 let bounds = plot_ui.plot_bounds();
                 let x_span = bounds.max()[0] - bounds.min()[0];
-                let label_x = (bounds.min()[0].max(bounds.max()[0] - 0.01)).min(bounds.min()[0] + 0.01 * x_span + 0.01);
+                let label_x = bounds.min()[0].max(bounds.max()[0] - 0.01).min(bounds.min()[0] + 0.01 * x_span + 0.01);
 
                 for (f, name, midi) in &self.note_marks {
                     let is_c = *midi % 12 == 0;
