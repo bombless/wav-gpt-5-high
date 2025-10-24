@@ -6,31 +6,31 @@ use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text 
 use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRadius, Painter, Pos2, Rect, StrokeKind, Vec2, Window, Shape::LineSegment, FontId};
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
-use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::{HashMap, HashSet};
 use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
 
+use cqt_rs::{CQTParams, Cqt};
+
 fn main() -> Result<(), Box<dyn Error>> {
-    // 命令行参数：wav_path [win_size] [hop_size]
+    // 命令行参数：wav_path [hop_size]
     let args: Vec<String> = env::args().collect();
     if args.len() < 2 {
         eprintln!(
-            "用法: {} <input.wav> [win_size=2048] [hop_size=512]",
+            "用法: {} <input.wav> [hop_size=512]",
             args.get(0).map(|s| s.as_str()).unwrap_or("prog")
         );
         std::process::exit(1);
     }
     let wav_path = &args[1];
-    let win_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(2048);
-    let hop_size: usize = args.get(3).and_then(|s| s.parse().ok()).unwrap_or(512);
+    let hop_size: usize = args.get(2).and_then(|s| s.parse().ok()).unwrap_or(512);
 
     let (mono, sample_rate) = read_wav_mono_f32(wav_path)?;
     let sr_in = sample_rate as f32;
     let duration = mono.len() as f32 / sr_in;
 
-    let (track, sampled_track, tones_track) = dominant_frequency_track(&mono, sr_in, win_size, hop_size)?;
+    let (track, sampled_track, tones_track) = dominant_frequency_track_cqt(&mono, sr_in, hop_size)?;
     let fmax = sr_in / 2.0;
 
     // 准备 App 状态
@@ -136,86 +136,95 @@ fn mixdown_to_mono_f32(samples: &[f32], channels: usize) -> Vec<f32> {
         mono
     }
 }
-
-fn dominant_frequency_track(
+/// 使用恒定Q变换 (CQT) 来跟踪主导频率及其谐波
+pub fn dominant_frequency_track_cqt(
     mono: &[f32],
     sr: f32,
-    win_size: usize,
     hop_size: usize,
+    // `win_size` 不再需要，CQT 会动态调整窗口
 ) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>, Vec<(f32, Vec<(String, f64, f32)>)>), Box<dyn Error>> {
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(win_size);
-    let hann: Vec<f32> = (0..win_size)
-        .map(|n| 0.5 * (1.0 - (2.0 * PI * n as f32 / (win_size as f32 - 1.0)).cos()))
+
+    // --- 1. 设置 CQT 参数 ---
+    let f_min = 32.7; // 最低频率 (例如钢琴上的 C1)
+    let bins_per_octave = 24; // 每个八度的桶数 (12个半音 * 2，提供更高分辨率)
+
+    // 确保最大频率不超过奈奎斯特频率
+    let f_max = (sr / 2.0).min(8000.0); // 8kHz 对于大多数音乐基频跟踪足够了
+
+    // 创建 CQT 参数对象，如果参数无效会返回错误
+    let params = CQTParams::new(f_min, f_max, bins_per_octave, sr as _, mono.len() / 10)?;
+    let num_bins = params.num_bins();
+    let cqt = Cqt::new(params);
+
+    // --- 2. 执行 CQT ---
+    // `cqt` 函数会处理整个音频信号，并返回一个二维 Vec
+    // 外层 Vec 代表时间帧，内层 Vec 代表该帧在各个频率桶上的能量值
+    let cqt_output = cqt.process(mono, hop_size);
+
+    // --- 3. 预计算每个 CQT 桶对应的中心频率 ---
+    // 这是 CQT 和 FFT 最大的区别：频率桶不再是线性间隔的
+    let cqt_freqs: Vec<f32> = (0..num_bins)
+        .map(|k| f_min * 2.0_f32.powf(k as f32 / bins_per_octave as f32))
         .collect();
 
+    // 初始化结果存储
     let mut track = Vec::<(f32, f32)>::new();
     let mut sampled_track = Vec::<(f32, [f32; 3])>::new();
     let mut tones_track = Vec::new();
 
-    let nyquist = sr / 2.0;
-    let mut start = 0usize;
+    // --- 4. 遍历 CQT 的结果帧并提取信息 ---
+    // cqt_output 的每个元素都是一个时间帧的频谱数据
+    for (frame_idx, mags) in cqt_output.iter().enumerate() {
 
-    while start + win_size <= mono.len() {
-        let mut buf: Vec<Complex<f32>> = (0..win_size)
-            .map(|i| Complex {
-                re: mono[start + i] * hann[i],
-                im: 0.0,
-            })
+        // 将帧索引转换为时间戳
+        let t = frame_idx as f32 * hop_size as f32 / sr;
+
+        // 找出能量最高的频率桶
+        // `mags` 已经是能量值（幅度的平方），无需再计算
+        let mut peaks: Vec<(usize, f32)> = mags
+            .iter()
+            .enumerate()
+            .map(|(k, &mag)| (k, mag))
             .collect();
 
-        fft.process(&mut buf);
-
-        let half = win_size / 2;
-
-        let mut peaks: Vec<(usize, f32)> = (0..half)
-            .map(|k| {
-                let c = buf[k];
-                let mag2 = c.re * c.re + c.im * c.im;
-                (k, mag2)
-            })
-            .collect();
-
+        // 按能量从高到低排序
         peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        // 获取前3个最强的频率
+        // 使用预计算的 `cqt_freqs` 来将桶索引映射到实际频率
         let top3_freqs: [f32; 3] = [
-            (peaks[0].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist),
-            if peaks.len() > 1 {
-                (peaks[1].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist)
-            } else {
-                0.0
-            },
-            if peaks.len() > 2 {
-                (peaks[2].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist)
-            } else {
-                0.0
-            },
+            if !peaks.is_empty() { cqt_freqs[peaks[0].0] } else { 0.0 },
+            if peaks.len() > 1 { cqt_freqs[peaks[1].0] } else { 0.0 },
+            if peaks.len() > 2 { cqt_freqs[peaks[2].0] } else { 0.0 },
         ];
 
+        // 找出前9个最强的音符
         let mut top9_tones = Vec::new();
         let mut tones = HashSet::new();
         for p in peaks {
-            let (name, freq) = nearest_note((p.0 as f32 * sr / win_size as f32) as _);
-            if !(freq > 0.0) {
+            // p.0 是桶索引, p.1 是能量
+            let freq = cqt_freqs[p.0];
+            let (name, nearest_freq) = nearest_note(freq as _);
+
+            // 忽略无效或非常低的频率
+            if !(freq > 0.0) || name.is_empty() {
                 continue;
             }
+            // 确保每个音符只添加一次
             if !tones.contains(&name) {
                 tones.insert(name.clone());
-                top9_tones.push((name, freq, p.1));
+                top9_tones.push((name, nearest_freq, p.1)); // (音符名, 标准音高, 能量)
                 if top9_tones.len() >= 9 {
                     break;
                 }
             }
         }
 
-        let t = start as f32 / sr;
         let f_max = top3_freqs[0];
 
         track.push((t, f_max));
         sampled_track.push((t, top3_freqs));
         tones_track.push((t, top9_tones));
-
-        start += hop_size;
     }
 
     Ok((track, sampled_track, tones_track))

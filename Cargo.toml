@@ -11,3 +11,4 @@ eframe = "0.33.0"   # egui 的应用框架
 #egui_plot = { path = "../egui_plot/egui_plot" }
 egui_plot = "0.34"
 egui-chinese-font = { path = "../egui-chinese-font" }
+cqt-rs = "0.1.0"
