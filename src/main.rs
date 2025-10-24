@@ -46,6 +46,7 @@ fn main() -> Result<(), Box<dyn Error>> {
         file_name,
         duration as f64,
         fmax as f64,
+        (sample_rate, mono),
         track
             .iter()
             .map(|(t, f)| [*t as f64, *f as f64])
@@ -380,7 +381,8 @@ enum PlaybackTrack {
     Sample1,
     Sample2,
     Sample3,
-    BeatNotes,  // 新增：节拍音符
+    Original,
+    BeatNotes,
 }
 
 impl PlaybackTrack {
@@ -390,7 +392,8 @@ impl PlaybackTrack {
             PlaybackTrack::Sample1 => "采样频率 #1",
             PlaybackTrack::Sample2 => "采样频率 #2",
             PlaybackTrack::Sample3 => "采样频率 #3",
-            PlaybackTrack::BeatNotes => "节拍音符",  // 新增
+            PlaybackTrack::Original => "原音",
+            PlaybackTrack::BeatNotes => "节拍音符",
         }
     }
 }
@@ -399,6 +402,7 @@ struct App {
     file_name: String,
     duration: f64,
     fmax: f64,
+    original: (u32, Vec<f32>),
     track: Vec<[f64; 2]>,
     sampled_track: Vec<(f64, [f64; 3])>,
     note_marks: Vec<(f64, String, i32)>,
@@ -432,6 +436,7 @@ impl App {
         file_name: String,
         duration: f64,
         fmax: f64,
+        original: (u32, Vec<f32>),
         track: Vec<[f64; 2]>,
         sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
@@ -446,6 +451,7 @@ impl App {
             time_bounds: (0.0, duration.max(1e-6)),
             freq_bounds: (0.0, fmax.max(1.0)),
             cached_notes: CachedNotes::analyze_beat_notes(120.0, duration, &track, &tones_track, 4),
+            original,
             track,
             sampled_track,
             note_marks,
@@ -498,6 +504,8 @@ impl App {
             self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
             let beat_duration = 60.0 / self.bpm;
             synth_beat_notes(&*self.cached_notes.track, self.sr_out, self.duration as f32, 0.3, beat_duration)
+        } else if self.selected_track == PlaybackTrack::Original {
+            self.original.1.clone()
         } else {
             // 播放连续频率轨迹
             let track_data = self.get_selected_track_data().unwrap();
@@ -517,7 +525,8 @@ impl App {
 
         if let Some(handle) = &self.handle {
             if let Ok(sink) = Sink::try_new(handle) {
-                let buf = SamplesBuffer::new(1, self.sr_out, synth);
+                let sample_rate = if self.selected_track == PlaybackTrack::Original { self.original.0 } else { self.sr_out };
+                let buf = SamplesBuffer::new(1, sample_rate, synth);
                 sink.append(buf);
                 sink.set_volume(0.9);
                 sink.play();
@@ -1087,6 +1096,7 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample1, PlaybackTrack::Sample1.label());
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample2, PlaybackTrack::Sample2.label());
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Sample3, PlaybackTrack::Sample3.label());
+                        ui.selectable_value(&mut self.selected_track, PlaybackTrack::Original, PlaybackTrack::Original.label());
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::BeatNotes, PlaybackTrack::BeatNotes.label());  // 新增
                     });
 
