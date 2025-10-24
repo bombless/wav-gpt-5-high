@@ -599,10 +599,10 @@ impl App {
 
         self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
 
-        let show_candidate_notes = plot.show(ui, |plot_ui| {
+        let configuration = plot.show(ui, |plot_ui| {
 
-            let mut show_candidate_notes = self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
-            let mut note_marks = None; // 在音符备选列表中选中哪一个音符
+            let mut editing_beat_id = self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
+            let mut chosen_note = None; // 在音符备选列表中选中哪一个音符
 
 
             // 十二平均律水平线
@@ -763,8 +763,8 @@ impl App {
                                 let rect_y_max = rect_y_max.clamp(self.freq_bounds.0, self.freq_bounds.1);
 
                                 if let Some(PlotPoint { x, y }) = click_pos {
-                                    if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max && show_candidate_notes.is_none() {
-                                        show_candidate_notes = Some(*id);
+                                    if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max && editing_beat_id.is_none() {
+                                        editing_beat_id = Some(*id);
                                         miss_click = false;
                                     }
                                 }
@@ -811,7 +811,7 @@ impl App {
                                         y_offset -= rect_height * 0.3;
                                         if let Some(PlotPoint { x, y }) = click_pos {
                                             if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
-                                                note_marks = Some((*id, name.clone(), *freq))
+                                                chosen_note = Some((*id, name.clone(), *freq))
                                             }
                                         }
                                         let rectangle = Polygon::new("音符备选框", PlotPoints::from(vec![
@@ -844,7 +844,7 @@ impl App {
 
 
                 if mouse_click && miss_click && self.cached_notes.configuring.is_some() {
-                    show_candidate_notes = None;
+                    editing_beat_id = None;
                 }
             }
 
@@ -868,19 +868,18 @@ impl App {
                 );
             }
             Configuration {
-                show_candidate_notes,
-                note_marks
-
+                editing_beat_id,
+                chosen_note,
             }
         });
 
         struct Configuration {
-            show_candidate_notes: Option<usize>,
-            note_marks: Option<(usize, String, f64)>,
+            editing_beat_id: Option<usize>,
+            chosen_note: Option<(usize, String, f64)>,
         }
 
-        self.cached_notes.configuring = if self.show_beat_notes { show_candidate_notes.inner.show_candidate_notes } else { None };
-        if let Some((id, name, freq)) = show_candidate_notes.inner.note_marks {
+        self.cached_notes.configuring = if self.show_beat_notes { configuration.inner.editing_beat_id } else { None };
+        if let Some((id, name, freq)) = configuration.inner.chosen_note {
             for b in &mut self.cached_notes.track {
                 if b.id == id {
                     b.configuration = Some((name.clone(), freq));
