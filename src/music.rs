@@ -1,15 +1,14 @@
 
 // ========================== 数据处理 ==========================
 
-use std::collections::HashSet;
+use std::collections::{HashMap, HashSet};
 use std::error::Error;
 use std::f32::consts::PI;
 use hound::{SampleFormat, WavReader};
 use rustfft::FftPlanner;
 use rustfft::num_complex::Complex;
-use crate::{nearest_note, Beat};
 
-pub fn read_wav_mono_f32(path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
+pub(crate) fn read_wav_mono_f32(path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> {
     let mut reader = WavReader::open(path)?;
     let spec = reader.spec();
     let sr = spec.sample_rate;
@@ -30,7 +29,7 @@ pub fn read_wav_mono_f32(path: &str) -> Result<(Vec<f32>, u32), Box<dyn Error>> 
     Ok((mono, sr))
 }
 
-pub fn mixdown_to_mono_i16(samples: &[i16], channels: usize) -> Vec<f32> {
+pub(crate) fn mixdown_to_mono_i16(samples: &[i16], channels: usize) -> Vec<f32> {
     if channels == 1 {
         samples.iter().map(|&s| s as f32 / 32768.0).collect()
     } else {
@@ -46,7 +45,7 @@ pub fn mixdown_to_mono_i16(samples: &[i16], channels: usize) -> Vec<f32> {
     }
 }
 
-pub fn mixdown_to_mono_f32(samples: &[f32], channels: usize) -> Vec<f32> {
+pub(crate) fn mixdown_to_mono_f32(samples: &[f32], channels: usize) -> Vec<f32> {
     if channels == 1 {
         samples.to_vec()
     } else {
@@ -62,7 +61,7 @@ pub fn mixdown_to_mono_f32(samples: &[f32], channels: usize) -> Vec<f32> {
     }
 }
 
-pub fn dominant_frequency_track(
+pub(crate) fn dominant_frequency_track(
     mono: &[f32],
     sr: f32,
     win_size: usize,
@@ -146,7 +145,7 @@ pub fn dominant_frequency_track(
     Ok((track, sampled_track, tones_track))
 }
 
-pub fn equal_temperament_marks(f_min: f32, f_max: f32) -> Vec<(f32, String, i32)> {
+pub(crate) fn equal_temperament_marks(f_min: f32, f_max: f32) -> Vec<(f32, String, i32)> {
     let names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
     let mut v = Vec::new();
     for midi in 0..=127 {
@@ -162,7 +161,7 @@ pub fn equal_temperament_marks(f_min: f32, f_max: f32) -> Vec<(f32, String, i32)
 }
 
 // ========================== 合成与播放 ==========================
-pub fn synth_beat_notes(
+pub(crate) fn synth_beat_notes(
     beat_notes: &[Beat],
     sr_out: u32,
     duration: f32,
@@ -246,7 +245,7 @@ fn fade(fade_length: usize, buffer: &mut [f32]) {
     }
 }
 
-pub fn synth_sine_from_track(
+pub(crate) fn synth_sine_from_track(
     track: &[(f32, f32)],
     sr_out: u32,
     duration: f32,
@@ -294,4 +293,123 @@ pub fn synth_sine_from_track(
     fade(fade_length, &mut y);
 
     y
+}
+
+
+
+pub(crate) struct CachedNotes {
+    pub(crate) track: Vec<Beat>,
+    bpm: f64,
+    duration: f64,
+    beats_per_bar: usize,
+    pub(crate) configuring: Option<usize>,
+}
+
+
+pub(crate) struct Beat {
+    pub(crate) id: usize,
+    pub(crate) beat_start: f64,
+    pub(crate) note_name: String,
+    pub(crate) note_freq: f64,
+    pub(crate) is_bar_start: bool,
+    pub(crate) candidates: Vec<(String, f64, f32)>,
+    pub(crate) configuration: Option<(String, f64)>,
+}
+
+impl CachedNotes {
+
+    pub(crate) fn update(&mut self, bpm: f64, duration: f64, track: &[[f64; 2]], tones_track: &[(f32, Vec<(String, f64, f32)>)], beats_per_bar: usize) {
+        if self.bpm != bpm || self.duration != duration || self.beats_per_bar != beats_per_bar {
+            *self = Self::analyze_beat_notes(bpm, duration, track, tones_track, beats_per_bar);
+        }
+    }
+
+
+    // 分析每个节拍的主导音符
+    pub(crate) fn analyze_beat_notes(bpm: f64, duration: f64, track: &[[f64; 2]], tones_track: &[(f32, Vec<(String, f64, f32)>)], beats_per_bar: usize) -> CachedNotes {
+        if bpm <= 0.0 {
+            return CachedNotes {
+                track: vec![],
+                bpm,
+                duration,
+                beats_per_bar,
+                configuring: None,
+            };
+        }
+
+        let beat_duration = 60.0 / bpm;
+        let mut beat_notes = Vec::new();
+
+        let num_beats = (duration / beat_duration).ceil() as usize;
+
+
+
+        for beat_idx in 0..num_beats {
+            let beat_start = beat_idx as f64 * beat_duration;
+            let beat_end = beat_start + beat_duration;
+
+            if beat_start > duration {
+                break;
+            }
+
+            // 收集这个节拍内的所有频率数据
+            let mut freqs_in_beat = Vec::new();
+
+            for point in track {
+                if point[0] >= beat_start && point[0] < beat_end && point[1] > 20.0 {
+                    freqs_in_beat.push(point[1]);
+                }
+            }
+
+            let mut tones = HashMap::new();
+
+            for &(t, ref candidates) in tones_track {
+                if t >= beat_start as f32 && t < beat_end as f32 {
+                    for &(ref note, freq, weight) in candidates {
+                        tones.entry(note).or_insert((freq, 0.0)).1 += weight;
+                    }
+                }
+            }
+
+            let mut sort_vec = tones.iter().collect::<Vec<_>>();
+            sort_vec.sort_by(|a, b| b.1.1.partial_cmp(&a.1.1).unwrap());
+            let candidates = sort_vec.into_iter().take(15).map(|(&k, &(freq, w))| (k.clone(), freq, w)).collect();
+
+
+
+            if !freqs_in_beat.is_empty() {
+                // 计算中位数频率（比平均值更稳定）
+                freqs_in_beat.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                let median_freq = freqs_in_beat[freqs_in_beat.len() / 2];
+
+                let (note_name, note_freq) = nearest_note(median_freq);
+                let is_bar_start = beat_idx % beats_per_bar == 0;
+
+                beat_notes.push(Beat {id: beat_idx, beat_start, note_name, note_freq, is_bar_start, candidates, configuration: Default::default()});
+            }
+        }
+
+        CachedNotes {
+            track: beat_notes,
+            bpm,
+            duration,
+            beats_per_bar,
+            configuring: None,
+        }
+    }
+}
+
+
+pub(crate) fn nearest_note(freq: f64) -> (String, f64) {
+    if freq <= 0.0 {
+        return ("N/A".into(), 0.0);
+    }
+    let midi = (69.0 + 12.0 * (freq / 440.0).log2()).round();
+    let midi_i = midi.clamp(0.0, 127.0) as i32;
+    let names = ["C","C#","D","D#","E","F","F#","G","G#","A","A#","B"];
+    let pc = (midi_i % 12) as usize;
+    let octave = (midi_i / 12) - 1;
+    let name = format!("{}{}", names[pc], octave);
+    let f = 440.0 * 2f64.powf((midi_i as f64 - 69.0) / 12.0);
+    (name, f)
 }
