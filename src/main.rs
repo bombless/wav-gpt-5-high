@@ -290,26 +290,13 @@ impl App {
         };
 
         self.play_position = if !self.play_from_start && self.play_position > 0.0 {
-            let mut position = 0.0;
-            let step = beat_duration;
-            loop {
-                if position + step >= self.play_position {
-                    break position
-                }
-                position += step;
-            }
+            beat_duration * ((self.play_position / beat_duration).ceil() - 1.0)
         } else {
             0.0
         };
 
         let skip_samples = if self.play_position > 0.0 {
-            let mut skip_samples = 0;
-            loop {
-                if skip_samples as f64 / sr_out as f64 > self.play_position {
-                    break skip_samples
-                }
-                skip_samples += 1;
-            }
+            ((self.play_position * sr_out as f64).ceil() - 1.0) as _
         } else {
             0
         };
