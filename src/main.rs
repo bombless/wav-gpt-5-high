@@ -424,6 +424,12 @@ struct App {
     play_start_time: Option<Instant>,
     play_position: f64,
     cached_notes: CachedNotes,
+
+    last_time: Option<Instant>,
+    last_check_time: Instant,
+    frames_since_last_check_time: usize,
+    fps_frame_gap: f64,
+    fps_frame_count: f64,
 }
 
 impl App {
@@ -463,6 +469,12 @@ impl App {
             playing: false,
             play_start_time: None,
             play_position: 0.0,
+
+            last_time: None,
+            last_check_time: Instant::now(),
+            frames_since_last_check_time: 0,
+            fps_frame_gap: 0.0,
+            fps_frame_count: 0.0,
         }
     }
 
@@ -1042,6 +1054,24 @@ fn draw_pie_chart(painter: &Painter,
 
 impl eframe::App for App {
     fn update(&mut self, ctx: &egui::Context, _frame: &mut eframe::Frame) {
+
+        let elapsed_last_check = self.last_check_time.elapsed().as_secs_f64();
+
+        if elapsed_last_check > 2.0 {
+            if let Some(last_time) = &self.last_time {
+                let elapsed_last_frame = last_time.elapsed().as_secs_f64();
+                self.fps_frame_gap = 1.0 / elapsed_last_frame;
+            }
+            self.fps_frame_count = self.frames_since_last_check_time as f64 / elapsed_last_check;
+            self.frames_since_last_check_time = 0;
+
+            self.last_check_time = Instant::now();
+        }
+
+        self.last_time = Some(Instant::now());
+        self.frames_since_last_check_time += 1;
+
+
         self.update_play_position();
 
         if self.playing {
@@ -1113,6 +1143,15 @@ impl eframe::App for App {
                 ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
                 ui.separator();
                 ui.label(format!("时长: {:.3}s", self.duration));
+
+
+                let msg = format!(
+                    "fps_frame_gap {:.1}Hz fps_frame_count {:.1}Hz",
+                    self.fps_frame_gap,
+                    self.fps_frame_count,
+                );
+                ui.separator();
+                ui.label(msg);
 
                 if self.playing {
                     ui.separator();
