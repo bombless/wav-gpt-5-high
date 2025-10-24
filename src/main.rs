@@ -9,6 +9,7 @@ use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
 use std::{fs, env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::{HashMap, HashSet};
+use std::time::Duration;
 use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
 use serde::{Deserialize, Serialize};
@@ -436,6 +437,7 @@ struct App {
     sampled_track: Vec<(f64, [f64; 3])>,
     note_marks: Vec<(f64, String, i32)>,
     tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
+    cached_notes: CachedNotes,
 
     show_pie_chart: bool,
     show_note_lines: bool,
@@ -456,7 +458,7 @@ struct App {
     playing: bool,
     play_start_time: Option<Instant>,
     play_position: f64,
-    cached_notes: CachedNotes,
+    play_from_start: bool,
 
     last_time: Option<Instant>,
     last_check_time: Instant,
@@ -521,6 +523,7 @@ impl App {
             playing: false,
             play_start_time: None,
             play_position: 0.0,
+            play_from_start: true,
 
             last_time: None,
             last_check_time: Instant::now(),
@@ -552,6 +555,13 @@ impl App {
 
     fn start_play(&mut self) {
         if self.playing {
+            return;
+        }
+
+        if !self.play_from_start && self.play_position > 0.0 && let Some(sink) = &self.sink {
+            self.play_start_time = Instant::now().checked_sub(Duration::from_millis((self.play_position * 1000.0) as u64));
+            sink.play();
+            self.playing = true;
             return;
         }
 
@@ -588,7 +598,7 @@ impl App {
             if let Ok(sink) = Sink::try_new(handle) {
                 let buf = SamplesBuffer::new(1, sr_out, synth);
                 sink.append(buf);
-                sink.set_volume(0.9);
+                sink.set_volume(0.7);
                 sink.play();
                 self.sink = Some(sink);
                 self.playing = true;
@@ -600,9 +610,9 @@ impl App {
 
     fn stop_play(&mut self) {
         if let Some(sink) = &self.sink {
-            sink.stop();
+            sink.pause();
         }
-        self.sink = None;
+        // self.sink = None;
         self.playing = false;
         self.play_start_time = None;
         // self.play_position = 0.0;
@@ -1163,6 +1173,8 @@ impl eframe::App for App {
                 ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
                 ui.separator();
                 ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
+                ui.separator();
+                ui.checkbox(&mut self.play_from_start, "每次从头播放");
                 let bpm = self.bpm;
                 let beats_per_bar = self.beats_per_bar;
                 if self.show_beat_lines || self.show_beat_notes {
