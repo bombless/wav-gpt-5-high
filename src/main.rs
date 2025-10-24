@@ -388,6 +388,7 @@ impl App {
             let mut editing_beat_id = self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
             let mut chosen_note = None; // 在音符备选列表中选中哪一个音符
             let mut set_play_position = None;
+            let mut set_note_full = None;
 
             if ctrl && let Some(pos) = plot_ui.pointer_coordinate() {
                 set_play_position = Some(pos.x);
@@ -524,7 +525,7 @@ impl App {
 
                     // 绘制节拍音符标注框
                     if self.show_beat_notes {
-                        if let Some(music::Beat { id, note_name, note_freq, is_bar_start: is_strong, configuration, candidates, ..}) = self.cached_notes.track.iter()
+                        if let Some(music::Beat { id, full, note_name, note_freq, is_bar_start: is_strong, configuration, candidates, ..}) = self.cached_notes.track.iter()
                             .find(|music::Beat { beat_start: t, ..}| (*t - beat_time).abs() < beat_duration * 0.1) {
 
                             // 矩形位置：在图表顶部
@@ -622,6 +623,28 @@ impl App {
                                         );
                                     }
                                 }
+
+                                let rect_x_min = rect_x_max;
+                                let rect_x_max = rect_x_min + beat_duration * 0.2;
+                                let rect_y_min = rect_y_center - rect_height / 4.0;
+                                let rect_y_max = rect_y_center + rect_height / 4.0;
+
+                                if let Some(PlotPoint { x, y }) = click_pos {
+                                    if x > rect_x_min && x < rect_x_max && y > rect_y_min && y < rect_y_max {
+                                        set_note_full = Some((*id, !*full));
+                                    }
+                                }
+
+                                if *full {
+                                    let rectangle = Polygon::new("音符连线（唱满一个节拍）", PlotPoints::from(vec![
+                                        [rect_x_min, rect_y_min],
+                                        [rect_x_min, rect_y_max],
+                                        [rect_x_max, rect_y_max],
+                                        [rect_x_max, rect_y_min],
+
+                                    ])).fill_color(Color32::YELLOW).stroke(Stroke::new(0.0, border_color));
+                                    plot_ui.polygon(rectangle.name(""));
+                                }
                             }
 
                         }
@@ -658,6 +681,7 @@ impl App {
                 editing_beat_id,
                 chosen_note,
                 set_play_position,
+                set_note_full,
             }
         });
 
@@ -665,6 +689,7 @@ impl App {
             editing_beat_id: Option<usize>,
             chosen_note: Option<(usize, String, f64)>,
             set_play_position: Option<f64>,
+            set_note_full: Option<(usize, bool)>,
         }
 
         self.cached_notes.configuring = if self.show_beat_notes { configuration.inner.editing_beat_id } else { None };
@@ -677,6 +702,13 @@ impl App {
         }
         if !self.playing && let Some(position) = configuration.inner.set_play_position {
             self.play_position = position;
+        }
+        if let Some((id, value)) = configuration.inner.set_note_full {
+            for b in &mut self.cached_notes.track {
+                if b.id == id {
+                    b.full = value;
+                }
+            }
         }
 
     }

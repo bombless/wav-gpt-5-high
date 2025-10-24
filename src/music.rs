@@ -176,12 +176,12 @@ pub(crate) fn synth_beat_notes(
     let sr_out_f = sr_out as f32;
     let mut y = vec![0.0f32; n];
 
-    for Beat {beat_start: beat_time, note_freq, configuration, is_bar_start, ..} in beat_notes {
+    for Beat {beat_start: beat_time, full, note_freq, configuration, is_bar_start, ..} in beat_notes {
         let freq = if let Some((_, f)) = configuration { *f as f32 } else { *note_freq as f32 };
         let start_sample = (*beat_time as f32 * sr_out_f) as usize;
 
         // 音符持续时间为节拍的90%，留10%间隙
-        let note_duration = (beat_duration * 0.9) as f32;
+        let note_duration = if *full { beat_duration } else { beat_duration * 0.9 } as f32;
         let end_sample = ((beat_time + note_duration as f64) as f32 * sr_out_f) as usize;
 
         if start_sample >= n {
@@ -211,7 +211,7 @@ pub(crate) fn synth_beat_notes(
             } else if i < attack + decay {
                 // Decay: 从1.0衰减到sustain_level
                 1.0 - (1.0 - sustain_level) * ((i - attack) as f32 / decay as f32)
-            } else if i < note_samples.saturating_sub(release) {
+            } else if *full || i < note_samples.saturating_sub(release) {
                 // Sustain: 保持恒定
                 sustain_level
             } else {
@@ -309,6 +309,7 @@ pub(crate) struct CachedNotes {
 pub(crate) struct Beat {
     pub(crate) id: usize,
     pub(crate) beat_start: f64,
+    pub(crate) full: bool,
     pub(crate) note_name: String,
     pub(crate) note_freq: f64,
     pub(crate) is_bar_start: bool,
@@ -385,7 +386,7 @@ impl CachedNotes {
                 let (note_name, note_freq) = nearest_note(median_freq);
                 let is_bar_start = beat_idx % beats_per_bar == 0;
 
-                beat_notes.push(Beat {id: beat_idx, beat_start, note_name, note_freq, is_bar_start, candidates, configuration: Default::default()});
+                beat_notes.push(Beat {id: beat_idx, full: false, beat_start, note_name, note_freq, is_bar_start, candidates, configuration: Default::default()});
             }
         }
 
