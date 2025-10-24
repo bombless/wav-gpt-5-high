@@ -763,7 +763,7 @@ impl App {
                                 let rect_y_max = rect_y_max.clamp(self.freq_bounds.0, self.freq_bounds.1);
 
                                 if let Some(PlotPoint { x, y }) = click_pos {
-                                    if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max {
+                                    if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max && show_candidate_notes.is_none() {
                                         show_candidate_notes = Some(*id);
                                         miss_click = false;
                                     }
