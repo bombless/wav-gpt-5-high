@@ -483,7 +483,9 @@ impl App {
         let mut bpm = 120.0;
         let mut selected_track = PlaybackTrack::Max;
 
-        let config = if let Ok(config) = Config::load(Path::new(CONFIG_PATH)) && let Some(track_config) = config.tracks.get(&file_name) {
+        let config = Config::load(Path::new(CONFIG_PATH)).unwrap_or_default();
+
+        if let Some(track_config) = config.tracks.get(&file_name) {
             if (3..=6).contains(&track_config.beats_per_bar) {
                 beats_per_bar = track_config.beats_per_bar;
             }
@@ -491,10 +493,8 @@ impl App {
                 bpm = track_config.bpm;
             }
             selected_track = track_config.playback_track;
-            config
-        } else {
-            Config::default()
-        };
+        }
+
         Ok(Self {
             file_name,
             duration,
