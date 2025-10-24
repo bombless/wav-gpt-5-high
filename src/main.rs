@@ -601,8 +601,8 @@ impl App {
 
         let show_candidate_notes = plot.show(ui, |plot_ui| {
 
-            let mut show_candidate_notes = self.cached_notes.configuring;
-            let mut note_marks = None;
+            let mut show_candidate_notes = self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
+            let mut note_marks = None; // 在音符备选列表中选中哪一个音符
 
 
             // 十二平均律水平线
@@ -879,7 +879,7 @@ impl App {
             note_marks: Option<(usize, String, f64)>,
         }
 
-        self.cached_notes.configuring = show_candidate_notes.inner.show_candidate_notes;
+        self.cached_notes.configuring = if self.show_beat_notes { show_candidate_notes.inner.show_candidate_notes } else { None };
         if let Some((id, name, freq)) = show_candidate_notes.inner.note_marks {
             for b in &mut self.cached_notes.track {
                 if b.id == id {
