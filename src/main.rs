@@ -45,7 +45,7 @@ fn main() -> Result<(), Box<dyn Error>> {
     let app = App::new(
         file_name,
         duration as f64,
-        fmax as f64,
+        fmax as _,
         (sample_rate, mono),
         track
             .iter()
@@ -401,7 +401,6 @@ impl PlaybackTrack {
 struct App {
     file_name: String,
     duration: f64,
-    fmax: f64,
     original: (u32, Vec<f32>),
     track: Vec<[f64; 2]>,
     sampled_track: Vec<(f64, [f64; 3])>,
@@ -447,7 +446,6 @@ impl App {
         Self {
             file_name,
             duration,
-            fmax,
             time_bounds: (0.0, duration.max(1e-6)),
             freq_bounds: (0.0, fmax.max(1.0)),
             cached_notes: CachedNotes::analyze_beat_notes(120.0, duration, &track, &tones_track, 4),
@@ -1119,8 +1117,6 @@ impl eframe::App for App {
                 ui.label(RichText::new(format!("文件: {}", self.file_name)).strong());
                 ui.separator();
                 ui.label(format!("时长: {:.3}s", self.duration));
-                ui.separator();
-                ui.label(format!("Nyquist: {:.0}Hz", self.fmax));
 
                 if self.playing {
                     ui.separator();
