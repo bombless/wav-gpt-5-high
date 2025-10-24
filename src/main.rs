@@ -7,10 +7,42 @@ use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRa
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use rustfft::{num_complex::Complex, FftPlanner};
-use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
+use std::{fs, env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::{HashMap, HashSet};
 use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
+use serde::{Deserialize, Serialize};
+
+const CONFIG_PATH: &'static str = "app.toml";
+
+#[derive(Serialize, Deserialize, Default, Clone, PartialEq, Debug)]
+struct TrackCfg {
+    bpm: f64,
+    beats_per_bar: usize,
+}
+
+#[derive(Serialize, Deserialize, Default)]
+struct Config {
+    // 键用字符串，避免 Windows 路径分隔符在 TOML key 里转义
+    tracks: HashMap<String, TrackCfg>,
+}
+
+impl Config {
+    fn load(path: &Path) -> anyhow::Result<Self> {
+        Ok(if path.exists() {
+            toml::from_str(&fs::read_to_string(path)?)?
+        } else {
+            Self::default()
+        })
+    }
+    fn save(&self, path: &Path) -> anyhow::Result<()> {
+        if let Some(p) = path.parent() {
+            fs::create_dir_all(p)?;
+        }
+        fs::write(path, toml::to_string_pretty(self)?)?;
+        Ok(())
+    }
+}
 
 fn main() -> Result<(), Box<dyn Error>> {
     // 命令行参数：wav_path [win_size] [hop_size]
@@ -59,7 +91,7 @@ fn main() -> Result<(), Box<dyn Error>> {
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
         tones_track,
-    );
+    )?;
 
     let native_options = eframe::NativeOptions {
         viewport: egui::ViewportBuilder::default()
@@ -429,6 +461,8 @@ struct App {
     frames_since_last_check_time: usize,
     fps_frame_gap: f64,
     fps_frame_count: f64,
+    
+    config: Config,
 }
 
 impl App {
@@ -441,8 +475,21 @@ impl App {
         sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
         tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
-    ) -> Self {
-        Self {
+    ) -> anyhow::Result<Self> {
+
+        let mut beats_per_bar = 4;
+        let mut bpm = 120.0;
+
+        let config = Config::load(Path::new(CONFIG_PATH))?;
+        if let Some(track_config) = config.tracks.get(&file_name) {
+            if (3..=6).contains(&track_config.beats_per_bar) {
+                beats_per_bar = track_config.beats_per_bar;
+            }
+            if track_config.bpm>= 1.0 {
+                bpm = track_config.bpm;
+            }
+        }
+        Ok(Self {
             file_name,
             duration,
             time_bounds: (0.0, duration.max(1e-6)),
@@ -457,9 +504,9 @@ impl App {
             show_note_lines: false, // 默认不显示十二平均律线
             show_sampled_freqs: true,
             dense_threshold: 36,
-            bpm: 120.0,
+            bpm,
             show_beat_lines: false, // 默认不显示节拍线
-            beats_per_bar: 4,
+            beats_per_bar,
             show_beat_notes: true,  // 默认显示节拍音符
             selected_track: PlaybackTrack::Max,
             stream: None,
@@ -474,7 +521,9 @@ impl App {
             frames_since_last_check_time: 0,
             fps_frame_gap: 0.0,
             fps_frame_count: 0.0,
-        }
+            
+            config,
+        })
     }
 
     fn get_selected_track_data(&self) -> Option<Vec<(f32, f32)>> {
@@ -1111,12 +1160,14 @@ impl eframe::App for App {
                 if self.show_beat_lines || self.show_beat_notes {
                     ui.separator();
                     ui.label("BPM:");
+                    let bpm = self.bpm;
                     ui.add(egui::DragValue::new(&mut self.bpm)
                         .speed(1.0)
                         .range(30.0..=300.0));
 
                     ui.separator();
                     ui.label("拍号:");
+                    let beats_per_bar = self.beats_per_bar;
                     egui::ComboBox::from_id_salt("beats_per_bar")
                         .selected_text(format!("{}/4", self.beats_per_bar))
                         .show_ui(ui, |ui| {
@@ -1125,6 +1176,13 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.beats_per_bar, 5, "5/4");
                             ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
                         });
+                    if bpm != self.bpm || beats_per_bar != self.beats_per_bar {
+                        self.config.tracks.insert(self.file_name.clone(), TrackCfg {
+                            bpm: self.bpm,
+                            beats_per_bar: self.beats_per_bar,
+                        });
+                        self.config.save(&Path::new(CONFIG_PATH)).unwrap();
+                    }
                 }
                 ui.separator();
 
