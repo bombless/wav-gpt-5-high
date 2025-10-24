@@ -3409,6 +3409,7 @@ dependencies = [
  "egui-chinese-font",
  "egui_plot",
  "hound",
+ "num-complex",
  "rodio",
  "rustfft",
 ]

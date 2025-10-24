@@ -6,11 +6,11 @@ use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text 
 use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRadius, Painter, Pos2, Rect, StrokeKind, Vec2, Window, Shape::LineSegment, FontId};
 use hound::{SampleFormat, WavReader};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
-use rustfft::{num_complex::Complex, FftPlanner};
 use std::{env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::{HashMap, HashSet};
 use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
+use num_complex::Complex;
 
 fn main() -> Result<(), Box<dyn Error>> {
     // 命令行参数：wav_path [win_size] [hop_size]
@@ -136,18 +136,23 @@ fn mixdown_to_mono_f32(samples: &[f32], channels: usize) -> Vec<f32> {
         mono
     }
 }
-
 fn dominant_frequency_track(
     mono: &[f32],
     sr: f32,
     win_size: usize,
     hop_size: usize,
 ) -> Result<(Vec<(f32, f32)>, Vec<(f32, [f32; 3])>, Vec<(f32, Vec<(String, f64, f32)>)>), Box<dyn Error>> {
-    let mut planner = FftPlanner::<f32>::new();
-    let fft = planner.plan_fft_forward(win_size);
-    let hann: Vec<f32> = (0..win_size)
-        .map(|n| 0.5 * (1.0 - (2.0 * PI * n as f32 / (win_size as f32 - 1.0)).cos()))
-        .collect();
+
+    // CQT 参数配置
+    let fmin = 32.7;  // C1，最低频率
+    let fmax = (sr / 2.0).min(4186.0);  // 最高频率限制在C8
+    let bins_per_octave = 36;  // 每个八度36个bins（每半音3个bins，分辨率更高）
+
+    // 计算所需bins数量
+    let n_bins = ((fmax / fmin).log2() * bins_per_octave as f32).ceil() as usize;
+
+    // 预计算CQT滤波器组
+    let cqt_kernels = build_cqt_kernels(sr, fmin, n_bins, bins_per_octave, win_size);
 
     let mut track = Vec::<(f32, f32)>::new();
     let mut sampled_track = Vec::<(f32, [f32; 3])>::new();
@@ -156,52 +161,52 @@ fn dominant_frequency_track(
     let nyquist = sr / 2.0;
     let mut start = 0usize;
 
+    // Hann窗
+    let hann: Vec<f32> = (0..win_size)
+        .map(|n| 0.5 * (1.0 - (2.0 * PI * n as f32 / (win_size as f32 - 1.0)).cos()))
+        .collect();
+
     while start + win_size <= mono.len() {
-        let mut buf: Vec<Complex<f32>> = (0..win_size)
-            .map(|i| Complex {
-                re: mono[start + i] * hann[i],
-                im: 0.0,
-            })
+        // 加窗
+        let windowed: Vec<f32> = (0..win_size)
+            .map(|i| mono[start + i] * hann[i])
             .collect();
 
-        fft.process(&mut buf);
+        // 执行CQT变换
+        let cqt_mags = apply_cqt(&windowed, &cqt_kernels);
 
-        let half = win_size / 2;
-
-        let mut peaks: Vec<(usize, f32)> = (0..half)
-            .map(|k| {
-                let c = buf[k];
-                let mag2 = c.re * c.re + c.im * c.im;
-                (k, mag2)
-            })
+        // 提取峰值
+        let mut peaks: Vec<(usize, f32)> = cqt_mags
+            .iter()
+            .enumerate()
+            .map(|(i, &mag)| (i, mag))
             .collect();
 
         peaks.sort_by(|a, b| b.1.partial_cmp(&a.1).unwrap_or(std::cmp::Ordering::Equal));
 
+        // Bin索引转频率
+        let bin_to_freq = |bin: usize| -> f32 {
+            fmin * 2.0f32.powf(bin as f32 / bins_per_octave as f32)
+        };
+
+        // 提取前3个主频率
         let top3_freqs: [f32; 3] = [
-            (peaks[0].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist),
-            if peaks.len() > 1 {
-                (peaks[1].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist)
-            } else {
-                0.0
-            },
-            if peaks.len() > 2 {
-                (peaks[2].0 as f32 * sr / win_size as f32).clamp(0.0, nyquist)
-            } else {
-                0.0
-            },
+            bin_to_freq(peaks.get(0).map(|p| p.0).unwrap_or(0)).clamp(0.0, nyquist),
+            peaks.get(1).map(|p| bin_to_freq(p.0).clamp(0.0, nyquist)).unwrap_or(0.0),
+            peaks.get(2).map(|p| bin_to_freq(p.0).clamp(0.0, nyquist)).unwrap_or(0.0),
         ];
 
+        // 提取前9个音调（去重）
         let mut top9_tones = Vec::new();
         let mut tones = HashSet::new();
-        for p in peaks {
-            let (name, freq) = nearest_note((p.0 as f32 * sr / win_size as f32) as _);
-            if !(freq > 0.0) {
+        for &(bin_idx, mag) in &peaks {
+            let freq = bin_to_freq(bin_idx);
+            let (name, note_freq) = nearest_note(freq as f64);
+            if note_freq <= 0.0 {
                 continue;
             }
-            if !tones.contains(&name) {
-                tones.insert(name.clone());
-                top9_tones.push((name, freq, p.1));
+            if tones.insert(name.clone()) {
+                top9_tones.push((name, note_freq, mag));
                 if top9_tones.len() >= 9 {
                     break;
                 }
@@ -209,9 +214,7 @@ fn dominant_frequency_track(
         }
 
         let t = start as f32 / sr;
-        let f_max = top3_freqs[0];
-
-        track.push((t, f_max));
+        track.push((t, top3_freqs[0]));
         sampled_track.push((t, top3_freqs));
         tones_track.push((t, top9_tones));
 
@@ -219,6 +222,66 @@ fn dominant_frequency_track(
     }
 
     Ok((track, sampled_track, tones_track))
+}
+
+/// 构建CQT滤波器核
+fn build_cqt_kernels(
+    sr: f32,
+    fmin: f32,
+    n_bins: usize,
+    bins_per_octave: usize,
+    max_len: usize,
+) -> Vec<Vec<Complex<f32>>> {
+    // Q值：频率/带宽比
+    let q = 1.0 / (2.0f32.powf(1.0 / bins_per_octave as f32) - 1.0);
+
+    (0..n_bins)
+        .map(|k| {
+            // 当前bin的中心频率
+            let freq = fmin * 2.0f32.powf(k as f32 / bins_per_octave as f32);
+
+            // 窗长度由Q值决定
+            let kernel_len = ((q * sr / freq).round() as usize).min(max_len);
+
+            // 生成复指数窗（Hann窗调制）
+            (0..kernel_len)
+                .map(|n| {
+                    let t = n as f32 / sr;
+                    let window = 0.5 * (1.0 - (2.0 * PI * n as f32 / (kernel_len - 1) as f32).cos());
+                    let phase = -2.0 * PI * freq * t;
+
+                    // 归一化
+                    let norm = (kernel_len as f32).sqrt();
+                    Complex {
+                        re: window * phase.cos() / norm,
+                        im: window * phase.sin() / norm,
+                    }
+                })
+                .collect()
+        })
+        .collect()
+}
+
+/// 应用CQT变换
+fn apply_cqt(signal: &[f32], kernels: &[Vec<Complex<f32>>]) -> Vec<f32> {
+    kernels
+        .iter()
+        .map(|kernel| {
+            // 卷积计算
+            let mut real_sum = 0.0f32;
+            let mut imag_sum = 0.0f32;
+
+            for (i, k) in kernel.iter().enumerate() {
+                if i < signal.len() {
+                    real_sum += signal[i] * k.re;
+                    imag_sum += signal[i] * k.im;
+                }
+            }
+
+            // 返回幅度
+            (real_sum * real_sum + imag_sum * imag_sum).sqrt()
+        })
+        .collect()
 }
 
 fn equal_temperament_marks(fmin: f32, fmax: f32) -> Vec<(f32, String, i32)> {
