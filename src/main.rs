@@ -19,6 +19,7 @@ const CONFIG_PATH: &'static str = "app.toml";
 struct TrackCfg {
     bpm: f64,
     beats_per_bar: usize,
+    playback_track: PlaybackTrack,
 }
 
 #[derive(Serialize, Deserialize, Default)]
@@ -403,8 +404,9 @@ fn synth_sine_from_track(
 
 // ========================== GUI 应用 ==========================
 
-#[derive(Debug, Clone, Copy, PartialEq)]
+#[derive(Debug, Clone, Copy, PartialEq, Default, Serialize, Deserialize)]
 enum PlaybackTrack {
+    #[default]
     Max,
     Sample1,
     Sample2,
@@ -479,16 +481,20 @@ impl App {
 
         let mut beats_per_bar = 4;
         let mut bpm = 120.0;
+        let mut selected_track = PlaybackTrack::Max;
 
-        let config = Config::load(Path::new(CONFIG_PATH))?;
-        if let Some(track_config) = config.tracks.get(&file_name) {
+        let config = if let Ok(config) = Config::load(Path::new(CONFIG_PATH)) && let Some(track_config) = config.tracks.get(&file_name) {
             if (3..=6).contains(&track_config.beats_per_bar) {
                 beats_per_bar = track_config.beats_per_bar;
             }
             if track_config.bpm>= 1.0 {
                 bpm = track_config.bpm;
             }
-        }
+            selected_track = track_config.playback_track;
+            config
+        } else {
+            Config::default()
+        };
         Ok(Self {
             file_name,
             duration,
@@ -508,7 +514,7 @@ impl App {
             show_beat_lines: false, // 默认不显示节拍线
             beats_per_bar,
             show_beat_notes: true,  // 默认显示节拍音符
-            selected_track: PlaybackTrack::Max,
+            selected_track,
             stream: None,
             handle: None,
             sink: None,
@@ -1157,17 +1163,17 @@ impl eframe::App for App {
                 ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
                 ui.separator();
                 ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
+                let bpm = self.bpm;
+                let beats_per_bar = self.beats_per_bar;
                 if self.show_beat_lines || self.show_beat_notes {
                     ui.separator();
                     ui.label("BPM:");
-                    let bpm = self.bpm;
                     ui.add(egui::DragValue::new(&mut self.bpm)
                         .speed(1.0)
                         .range(30.0..=300.0));
 
                     ui.separator();
                     ui.label("拍号:");
-                    let beats_per_bar = self.beats_per_bar;
                     egui::ComboBox::from_id_salt("beats_per_bar")
                         .selected_text(format!("{}/4", self.beats_per_bar))
                         .show_ui(ui, |ui| {
@@ -1176,13 +1182,6 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.beats_per_bar, 5, "5/4");
                             ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
                         });
-                    if bpm != self.bpm || beats_per_bar != self.beats_per_bar {
-                        self.config.tracks.insert(self.file_name.clone(), TrackCfg {
-                            bpm: self.bpm,
-                            beats_per_bar: self.beats_per_bar,
-                        });
-                        self.config.save(&Path::new(CONFIG_PATH)).unwrap();
-                    }
                 }
                 ui.separator();
 
@@ -1199,6 +1198,15 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::Original, PlaybackTrack::Original.label());
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::BeatNotes, PlaybackTrack::BeatNotes.label());  // 新增
                     });
+
+                if self.playing && prev_selection != self.selected_track || bpm != self.bpm || beats_per_bar != self.beats_per_bar {
+                    self.config.tracks.insert(self.file_name.clone(), TrackCfg {
+                        bpm: self.bpm,
+                        beats_per_bar: self.beats_per_bar,
+                        playback_track: self.selected_track,
+                    });
+                    self.config.save(&Path::new(CONFIG_PATH)).unwrap();
+                }
 
                 // 如果正在播放时切换轨迹，先停止播放
                 if self.playing && prev_selection != self.selected_track {
