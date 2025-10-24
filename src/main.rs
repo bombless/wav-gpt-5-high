@@ -814,23 +814,23 @@ impl App {
                                                 note_marks = Some((*id, name.clone(), *freq))
                                             }
                                         }
-                                        let rectangle = Polygon::new("rectangle", PlotPoints::from(vec![
+                                        let rectangle = Polygon::new("音符备选框", PlotPoints::from(vec![
                                             [rect_x_min, rect_y_min + y_offset],
                                             [rect_x_min, rect_y_max + y_offset],
                                             [rect_x_max, rect_y_max + y_offset],
                                             [rect_x_max, rect_y_min + y_offset],
 
                                         ])).fill_color(Color32::from_rgb(255, 0, 0)).stroke(Stroke::new(0.0, border_color));
-                                        plot_ui.polygon(rectangle);
+                                        plot_ui.polygon(rectangle.name(""));
 
                                         plot_ui.text(
-                                            PlotText::new("PlotPoints",
+                                            PlotText::new("音符备选文字",
                                                           PlotPoint { x: beat_time + rect_width / 2.0, y: y_offset + rect_y_max },
                                                           name
                                             )
                                                 .color(Color32::WHITE)
                                                 .anchor(Align2::CENTER_TOP)
-                                                .name("beat_note"),
+                                                .name(""),
                                         );
                                     }
                                 }
