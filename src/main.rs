@@ -40,7 +40,6 @@ fn main() -> Result<(), Box<dyn Error>> {
         .unwrap_or("input.wav")
         .to_string();
 
-    let sr_out = 44_100u32;
 
     let app = App::new(
         file_name,
@@ -60,7 +59,6 @@ fn main() -> Result<(), Box<dyn Error>> {
             .map(|(f, name, midi)| (f as f64, name, midi))
             .collect(),
         tones_track,
-        sr_out,
     );
 
     let native_options = eframe::NativeOptions {
@@ -419,7 +417,6 @@ struct App {
     show_beat_notes: bool,  // 新增：是否显示节拍音符标注
 
     selected_track: PlaybackTrack,
-    sr_out: u32,
     stream: Option<OutputStream>,
     handle: Option<OutputStreamHandle>,
     sink: Option<Sink>,
@@ -439,7 +436,6 @@ impl App {
         sampled_track: Vec<(f64, [f64; 3])>,
         note_marks: Vec<(f64, String, i32)>,
         tones_track: Vec<(f32, Vec<(String, f64, f32)>)>,
-        sr_out: u32,
     ) -> Self {
         Self {
             file_name,
@@ -461,7 +457,6 @@ impl App {
             beats_per_bar: 4,
             show_beat_notes: true,  // 默认显示节拍音符
             selected_track: PlaybackTrack::Max,
-            sr_out,
             stream: None,
             handle: None,
             sink: None,
@@ -494,18 +489,22 @@ impl App {
             return;
         }
 
+
+        let mut sr_out = 44_100u32;
+
         // 根据选择的轨迹类型生成音频
         let synth = if self.selected_track == PlaybackTrack::BeatNotes {
             // 播放节拍音符
             self.cached_notes.update(self.bpm, self.duration, &self.track, &self.tones_track, self.beats_per_bar);
             let beat_duration = 60.0 / self.bpm;
-            synth_beat_notes(&*self.cached_notes.track, self.sr_out, self.duration as f32, 0.3, beat_duration)
+            synth_beat_notes(&*self.cached_notes.track, sr_out, self.duration as f32, 0.3, beat_duration)
         } else if self.selected_track == PlaybackTrack::Original {
+            sr_out = self.original.0;
             self.original.1.clone()
         } else {
             // 播放连续频率轨迹
             let track_data = self.get_selected_track_data().unwrap();
-            synth_sine_from_track(&track_data, self.sr_out, self.duration as f32, 0.25)
+            synth_sine_from_track(&track_data, sr_out, self.duration as f32, 0.25)
         };
 
         if synth.is_empty() {
@@ -521,8 +520,7 @@ impl App {
 
         if let Some(handle) = &self.handle {
             if let Ok(sink) = Sink::try_new(handle) {
-                let sample_rate = if self.selected_track == PlaybackTrack::Original { self.original.0 } else { self.sr_out };
-                let buf = SamplesBuffer::new(1, sample_rate, synth);
+                let buf = SamplesBuffer::new(1, sr_out, synth);
                 sink.append(buf);
                 sink.set_volume(0.9);
                 sink.play();
