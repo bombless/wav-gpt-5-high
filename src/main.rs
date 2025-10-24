@@ -455,11 +455,11 @@ impl App {
             note_marks,
             tones_track,
             show_pie_chart: false,
-            show_note_lines: true,
+            show_note_lines: false, // 默认不显示十二平均律线
             show_sampled_freqs: true,
             dense_threshold: 36,
             bpm: 120.0,
-            show_beat_lines: true,
+            show_beat_lines: false, // 默认不显示节拍线
             beats_per_bar: 4,
             show_beat_notes: true,  // 默认显示节拍音符
             selected_track: PlaybackTrack::Max,
