@@ -392,14 +392,11 @@ impl App {
 
 
             let editing_beat_id = &self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
-            let mut chosen_note = None; // 在音符备选列表中选中哪一个音符
-            let mut set_play_position = None;
-            let mut set_note_full = None;
             let mut set_mouse_cursor = false;
             let mut click_type = if mouse_click { ClickType::Miss } else { ClickType::Nope };
 
             if ctrl && mouse_click && let Some(pos) = plot_ui.pointer_coordinate() {
-                set_play_position = Some(pos.x);
+                click_type = ClickType::SetPlayPosition { pos: pos.x };
             }
 
             // 十二平均律水平线
@@ -560,7 +557,7 @@ impl App {
 
                                 if let Some(PlotPoint { x, y }) = click_pos {
                                     if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max && editing_beat_id.is_none() {
-                                        click_type = ClickType::EditNote(*id);
+                                        click_type = ClickType::EditNote {id: *id};
                                     }
                                 }
 
@@ -618,7 +615,11 @@ impl App {
                                         y_offset -= rect_height * 0.3;
                                         if let Some(PlotPoint { x, y }) = click_pos {
                                             if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
-                                                chosen_note = Some((*id, name.clone(), *freq));
+                                                click_type = ClickType::ChooseNote {
+                                                    id: *id,
+                                                    name: name.clone(),
+                                                    f: *freq,
+                                                };
                                             }
                                         }
                                         let rectangle = Polygon::new("音符备选框", PlotPoints::from(vec![
@@ -649,7 +650,10 @@ impl App {
 
                                 if let Some(PlotPoint { x, y }) = click_pos {
                                     if x > rect_x_min && x < rect_x_max && y > rect_y_min && y < rect_y_max {
-                                        set_note_full = Some((*id, !*full));
+                                        click_type = ClickType::SetNoteFull {
+                                            id: *id,
+                                            full: !*full,
+                                        }
                                     }
                                 }
 
@@ -692,43 +696,33 @@ impl App {
             }
             Configuration {
                 click_type,
-                chosen_note,
-                set_play_position,
-                set_note_full,
                 set_mouse_cursor,
             }
         });
 
         struct Configuration {
             click_type: ClickType,
-            chosen_note: Option<(usize, String, f64)>,
-            set_play_position: Option<f64>,
-            set_note_full: Option<(usize, bool)>,
             set_mouse_cursor: bool,
         }
 
         enum ClickType {
             Nope,
             Miss,
-            EditNote(usize),
-        }
-
-        if let Some((id, name, freq)) = configuration.inner.chosen_note {
-            for b in &mut self.cached_notes.track {
-                if b.id == id {
-                    b.configuration = Some((name.clone(), freq));
-                }
-            }
-        }
-        if !self.playing && let Some(position) = configuration.inner.set_play_position {
-            self.play_position = position;
-        }
-        if let Some((id, value)) = configuration.inner.set_note_full {
-            for b in &mut self.cached_notes.track {
-                if b.id == id {
-                    b.full = value;
-                }
-            }
+            EditNote {
+                id: usize,
+            },
+            ChooseNote {
+                id: usize,
+                name: String,
+                f: f64,
+            },
+            SetPlayPosition {
+                pos: f64,
+            },
+            SetNoteFull {
+                id: usize,
+                full: bool,
+            },
         }
 
         if configuration.inner.set_mouse_cursor {
@@ -738,13 +732,30 @@ impl App {
         }
 
         match configuration.inner.click_type {
-            ClickType::EditNote(id) => {
+            ClickType::EditNote {id } => {
                 self.cached_notes.configuring = Some(id);
             }
             ClickType::Miss => {
                 self.cached_notes.configuring = None;
             }
-            _ => ()
+            ClickType::ChooseNote { id, name, f } => {
+                for b in &mut self.cached_notes.track {
+                    if b.id == id {
+                        b.configuration = Some((name.clone(), f));
+                    }
+                }
+            }
+            ClickType::SetPlayPosition { pos } => {
+                self.play_position = pos;
+            }
+            ClickType::SetNoteFull { id, full } => {
+                for b in &mut self.cached_notes.track {
+                    if b.id == id {
+                        b.full = full;
+                    }
+                }
+            }
+            ClickType::Nope => {}
         }
 
     }
