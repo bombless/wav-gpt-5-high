@@ -629,13 +629,23 @@ impl App {
                                                 };
                                             }
                                         }
-                                        let rectangle = Polygon::new("音符备选框", PlotPoints::from(vec![
+                                        let rectangle_color = if note_name == name {
+                                            Color32::GREEN
+                                        } else {
+                                            Color32::RED
+                                        };
+                                        let text_color = if note_name == name {
+                                            Color32::BLACK
+                                        } else {
+                                            Color32::WHITE
+                                        };
+                                        let points = PlotPoints::from(vec![
                                             [rect_x_min, rect_y_min + y_offset],
                                             [rect_x_min, rect_y_max + y_offset],
                                             [rect_x_max, rect_y_max + y_offset],
                                             [rect_x_max, rect_y_min + y_offset],
-
-                                        ])).fill_color(Color32::from_rgb(255, 0, 0)).stroke(Stroke::new(0.0, border_color));
+                                        ]);
+                                        let rectangle = Polygon::new("音符备选框", points).fill_color(rectangle_color).stroke(Stroke::NONE);
                                         plot_ui.polygon(rectangle.name(""));
 
                                         plot_ui.text(
@@ -643,7 +653,7 @@ impl App {
                                                           PlotPoint { x: beat_time + rect_width / 2.0, y: y_offset + rect_y_max },
                                                           name
                                             )
-                                                .color(Color32::WHITE)
+                                                .color(text_color)
                                                 .anchor(Align2::CENTER_TOP)
                                                 .name(""),
                                         );
@@ -762,6 +772,7 @@ impl App {
                         b.configuration = None;
                     }
                 }
+                self.cached_notes.configuring = None;
             }
             ClickType::SetPlayPosition { pos } => {
                 self.play_position = pos;
