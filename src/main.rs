@@ -248,6 +248,15 @@ impl App {
         })
     }
 
+    fn save_config(&mut self) {
+        self.config.tracks.insert(self.file_name.clone(), TrackCfg {
+            bpm: self.bpm,
+            beats_per_bar: self.beats_per_bar,
+            playback_track: self.selected_track,
+        });
+        self.config.save(&Path::new(CONFIG_PATH)).unwrap();
+    }
+
     fn get_selected_track_data(&self) -> Option<Vec<(f32, f32)>> {
         match self.selected_track {
             PlaybackTrack::Max => {
@@ -889,8 +898,6 @@ impl eframe::App for App {
                 ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
                 ui.separator();
                 ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
-                ui.separator();
-                ui.checkbox(&mut self.play_from_start, "每次从头播放");
                 let bpm = self.bpm;
                 let beats_per_bar = self.beats_per_bar;
                 if self.show_beat_lines || self.show_beat_notes {
@@ -911,7 +918,15 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
                         });
                 }
-                ui.separator();
+
+                if bpm != self.bpm || beats_per_bar != self.beats_per_bar {
+                    self.save_config();
+                }
+
+            });
+
+            ui.horizontal_wrapped(|ui| {
+
 
                 // 播放轨迹选择
                 ui.label("播放轨迹:");
@@ -927,19 +942,17 @@ impl eframe::App for App {
                         ui.selectable_value(&mut self.selected_track, PlaybackTrack::BeatNotes, PlaybackTrack::BeatNotes.label());  // 新增
                     });
 
-                if self.playing && prev_selection != self.selected_track || bpm != self.bpm || beats_per_bar != self.beats_per_bar {
-                    self.config.tracks.insert(self.file_name.clone(), TrackCfg {
-                        bpm: self.bpm,
-                        beats_per_bar: self.beats_per_bar,
-                        playback_track: self.selected_track,
-                    });
-                    self.config.save(&Path::new(CONFIG_PATH)).unwrap();
-                }
-
                 // 如果正在播放时切换轨迹，先停止播放
                 if self.playing && prev_selection != self.selected_track {
                     self.stop_play();
                 }
+
+                if prev_selection != self.selected_track {
+                    self.save_config();
+                }
+
+                ui.separator();
+                ui.checkbox(&mut self.play_from_start, "每次从头播放");
 
                 ui.separator();
                 if ui.button(if self.playing { "停止播放" } else { "播放合成音" }).clicked() {
@@ -948,6 +961,13 @@ impl eframe::App for App {
                     } else {
                         self.start_play();
                     }
+                }
+
+                if self.playing {
+                    ui.separator();
+                    ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s ({})",
+                                                   self.play_position, self.duration, self.selected_track.label()))
+                        .color(Color32::from_rgb(0, 200, 0)));
                 }
             });
 
@@ -960,13 +980,6 @@ impl eframe::App for App {
                 ui.label(format!("fps_frame_gap {:.1}Hz", self.fps_frame_gap));
                 ui.separator();
                 ui.label(format!("fps_frame_count {:.1}Hz", self.fps_frame_count));
-
-                if self.playing {
-                    ui.separator();
-                    ui.label(RichText::new(format!("▶ 播放中: {:.2}s / {:.2}s ({})",
-                                                   self.play_position, self.duration, self.selected_track.label()))
-                        .color(Color32::from_rgb(0, 200, 0)));
-                }
             });
         });
 
