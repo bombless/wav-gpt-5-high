@@ -176,6 +176,10 @@ pub(crate) fn synth_beat_notes(
     let sr_out_f = sr_out as f32;
     let mut y = vec![0.0f32; n];
 
+    let mut after_full = false;
+
+    let mut phase = 0.0f32;
+
     for Beat {beat_start: beat_time, full, note_freq, configuration, is_bar_start, ..} in beat_notes {
         let freq = if let Some((_, f)) = configuration { *f as f32 } else { *note_freq as f32 };
         let start_sample = (*beat_time as f32 * sr_out_f) as usize;
@@ -196,12 +200,32 @@ pub(crate) fn synth_beat_notes(
         let sustain_level = if *is_bar_start { 0.8 } else { 0.6 };  // 小节开始音量更大
         let release = (0.1 * sr_out_f) as usize;  // 100ms 释放
 
-        let mut phase = 0.0f32;
-
         for i in 0..note_samples {
             let sample_idx = start_sample + i;
             if sample_idx >= n {
                 break;
+            }
+
+            // 生成正弦波
+            phase += 2.0 * PI * freq / sr_out_f;
+            if phase > 2.0 * PI {
+                phase -= 2.0 * PI;
+            }
+            // y[sample_idx] += amp * sustain_level * phase.sin();
+            // continue;
+
+            if after_full {
+
+                let envelop = if *full || i < note_samples.saturating_sub(release) {
+                    // Sustain: 保持恒定
+                    sustain_level
+                } else {
+                    // Release: 线性下降到0
+                    sustain_level * ((note_samples - i) as f32 / release as f32)
+                };
+
+                y[sample_idx] += amp * envelop * phase.sin();
+                continue;
             }
 
             // 计算 ADSR 包络
@@ -219,14 +243,9 @@ pub(crate) fn synth_beat_notes(
                 sustain_level * ((note_samples - i) as f32 / release as f32)
             };
 
-            // 生成正弦波
-            phase += 2.0 * PI * freq / sr_out_f;
-            if phase > 2.0 * PI {
-                phase -= 2.0 * PI;
-            }
-
             y[sample_idx] += amp * envelope * phase.sin();
         }
+        after_full = *full;
     }
 
     // 整体淡入淡出
