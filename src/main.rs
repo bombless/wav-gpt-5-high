@@ -299,7 +299,11 @@ impl App {
             0
         };
 
-        let synth = if skip_samples > 0 { synth.into_iter().skip(skip_samples).collect::<Vec<_>>() } else { synth };
+        let mut synth = if skip_samples > 0 { synth.into_iter().skip(skip_samples).collect::<Vec<_>>() } else { synth };
+
+
+        let fade_length = (sr_out / 100 * 3) as usize;
+        music::fade(fade_length, &mut synth);
 
         if synth.is_empty() {
             return;

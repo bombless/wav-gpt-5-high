@@ -248,14 +248,10 @@ pub(crate) fn synth_beat_notes(
         after_full = *full;
     }
 
-    // 整体淡入淡出
-    let fade_length = (0.02 * sr_out_f) as usize;
-    fade(fade_length, &mut y);
-
     y
 }
 
-fn fade(fade_length: usize, buffer: &mut [f32]) {
+pub(crate) fn fade(fade_length: usize, buffer: &mut [f32]) {
     for i in 0..fade_length.min(buffer.len()) {
         let g = i as f32 / fade_length as f32;
         buffer[i] *= g;
@@ -307,9 +303,6 @@ pub(crate) fn synth_sine_from_track(
         phase += 2.0 * PI * f_inst / sr_out_f;
         y.push(amp * phase.sin());
     }
-
-    let fade_length = (0.02 * sr_out_f) as usize;
-    fade(fade_length, &mut y);
 
     y
 }
