@@ -3,7 +3,7 @@ mod color_gemini;
 mod music;
 
 use eframe::egui;
-use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Points, Polygon, Text as PlotText, VLine};
+use egui_plot::{HLine, Line, Plot, PlotPoint, PlotPoints, Points, Polygon, Text as PlotText, VLine};
 use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRadius, Painter, Pos2, Rect, StrokeKind, Vec2, Window, Shape::LineSegment, FontId};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use std::{fs, env, error::Error, f32::consts::PI, path::Path, time::Instant};
@@ -360,7 +360,6 @@ impl App {
 
     fn draw_plot(&mut self, ui: &mut egui::Ui) {
         let plot = Plot::new("dominant_freq_plot")
-            .legend(Legend::default())
             .allow_scroll(false)
             .allow_zoom(true)
             .allow_boxed_zoom(true)
@@ -368,16 +367,8 @@ impl App {
             .default_x_bounds(self.time_bounds.0, self.time_bounds.1)
             .default_y_bounds(self.freq_bounds.0, self.freq_bounds.1)
             .auto_bounds(Vec2b::new(true, true))
-            // .include_x(self.time_bounds.0)
-            // .include_x(self.time_bounds.1)
-            // .include_y(self.freq_bounds.0)
-            // .include_y(self.freq_bounds.1)
-            .label_formatter(|name, value| {
-                if !name.is_empty() {
-                    format!("{name}\n时间: {:.3}s\n频率: {:.1}Hz", value.x, value.y)
-                } else {
-                    format!("时间: {:.3}s\n频率: {:.1}Hz", value.x, value.y)
-                }
+            .label_formatter(|_name, value| {
+                format!("时间: {:.3}s\n频率: {:.1}Hz", value.x, value.y)
             });
 
         let (ctrl, mouse_click) = ui.input(|i| {
