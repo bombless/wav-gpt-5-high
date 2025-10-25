@@ -609,7 +609,7 @@ impl App {
 
                                 }
 
-                                plot_ui.points(Points::new("消去按钮", [rect_x_max, rect_y_max]).color(Color32::RED).radius(cancel_button_radius as f32).shape(Cross),);
+                                plot_ui.points(Points::new("消去按钮", [rect_x_max, rect_y_max]).color(Color32::RED).radius(cancel_button_radius as f32).shape(Cross));
 
                                 if *editing_beat_id == Some(*id) {
                                     let mut y_offset = -rect_height;
@@ -618,10 +618,14 @@ impl App {
                                         y_offset -= rect_height * 0.3;
                                         if let Some(PlotPoint { x, y }) = click_pos {
                                             if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
-                                                click_type = ClickType::ChooseNote {
-                                                    id: *id,
-                                                    name: name.clone(),
-                                                    f: *freq,
+                                                click_type = if note_name == name {
+                                                    ClickType::RestoreNote {id: *id}
+                                                } else {
+                                                    ClickType::ChooseNote {
+                                                        id: *id,
+                                                        name: name.clone(),
+                                                        f: *freq,
+                                                    }
                                                 };
                                             }
                                         }
@@ -719,6 +723,9 @@ impl App {
                 name: String,
                 f: f64,
             },
+            RestoreNote {
+                id: usize,
+            },
             SetPlayPosition {
                 pos: f64,
             },
@@ -745,6 +752,14 @@ impl App {
                 for b in &mut self.cached_notes.track {
                     if b.id == id {
                         b.configuration = Some((name.clone(), f));
+                    }
+                }
+                self.cached_notes.configuring = None;
+            }
+            ClickType::RestoreNote { id } => {
+                for b in &mut self.cached_notes.track {
+                    if b.id == id {
+                        b.configuration = None;
                     }
                 }
             }
