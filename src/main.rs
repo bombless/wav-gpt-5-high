@@ -541,7 +541,9 @@ impl App {
 
                             // 如果不够空间画音调就放弃不画了
 
-                            if rect.right() - rect.left() > FontId::default().size * 3.0 {
+                            let size_factor = (rect.right() - rect.left()) / FontId::default().size;
+
+                            if size_factor > 2.5 {
 
                                 // 矩形的四个角
                                 let rect_x_min = beat_time;
@@ -594,22 +596,25 @@ impl App {
                                                   label
                                     )
                                         .color(Color32::WHITE)
-                                        .anchor(Align2::CENTER_CENTER)
+                                        .anchor(Align2::CENTER_TOP)
                                         .name(""),
 
                                 );
 
-                                let cancel_button_radius = 10.0;
+                                if size_factor > 3.0 {
+                                    let cancel_button_radius = 10.0;
 
-                                if let Some(PlotPoint {x, y}) = plot_ui.pointer_coordinate() {
-                                    if (x - rect_x_max).abs() < cancel_button_radius && (y - rect_y_max).abs() < cancel_button_radius {
-                                        set_mouse_cursor = true;
+                                    if let Some(PlotPoint {x, y}) = plot_ui.pointer_coordinate() {
+                                        if (x - rect_x_max).abs() < cancel_button_radius && (y - rect_y_max).abs() < cancel_button_radius {
+                                            set_mouse_cursor = true;
+
+                                        }
 
                                     }
+                                    plot_ui.points(Points::new("消去按钮", [rect_x_max, rect_y_max]).color(Color32::RED).radius(cancel_button_radius as f32).shape(Cross));
 
                                 }
 
-                                plot_ui.points(Points::new("消去按钮", [rect_x_max, rect_y_max]).color(Color32::RED).radius(cancel_button_radius as f32).shape(Cross));
 
                                 if *editing_beat_id == Some(*id) {
                                     let mut y_offset = -rect_height;
