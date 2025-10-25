@@ -12,7 +12,7 @@ use std::time::Duration;
 use eframe::egui::CursorIcon;
 use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
-use egui_plot::MarkerShape::Cross;
+use egui_plot::MarkerShape::{Circle, Cross};
 use serde::{Deserialize, Serialize};
 
 const CONFIG_PATH: &'static str = "app.toml";
@@ -581,9 +581,12 @@ impl App {
 
                                 // 在矩形中心标注音符名称
                                 let label = if let Some((name, freq)) = configuration {
-                                    format!("{name}\n{freq:.1}Hz\n original\n[{} {:.1}Hz]", note_name, note_freq)
+                                    let points = Points::new("", PlotPoints::from([rect_x_min, rect_y_max])).
+                                        color(Color32::GREEN).shape(Circle).radius(5.0);
+                                    plot_ui.points(points);
+                                    format!("{name}\n{freq:.1}Hz")
                                 } else {
-                                    format!("{}\n{:.1}Hz", note_name, note_freq)
+                                    format!("{note_name}\n{note_freq:.1}Hz")
                                 };
                                 plot_ui.text(
                                     PlotText::new("音符名称",
