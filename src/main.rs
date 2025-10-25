@@ -3,14 +3,16 @@ mod color_gemini;
 mod music;
 
 use eframe::egui;
-use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Polygon, Text as PlotText, VLine};
+use egui_plot::{HLine, Legend, Line, Plot, PlotPoint, PlotPoints, Points, Polygon, Text as PlotText, VLine};
 use egui::{RichText, Color32, Align, Stroke, Align2, Vec2b, pos2, vec2, CornerRadius, Painter, Pos2, Rect, StrokeKind, Vec2, Window, Shape::LineSegment, FontId};
 use rodio::{buffer::SamplesBuffer, OutputStream, OutputStreamHandle, Sink};
 use std::{fs, env, error::Error, f32::consts::PI, path::Path, time::Instant};
 use std::collections::HashMap;
 use std::time::Duration;
+use eframe::egui::CursorIcon;
 use eframe::epaint::{PathShape, RectShape};
 use egui_chinese_font::setup_chinese_fonts;
+use egui_plot::MarkerShape::Cross;
 use serde::{Deserialize, Serialize};
 
 const CONFIG_PATH: &'static str = "app.toml";
@@ -393,6 +395,7 @@ impl App {
             let mut chosen_note = None; // 在音符备选列表中选中哪一个音符
             let mut set_play_position = None;
             let mut set_note_full = None;
+            let mut set_mouse_cursor = false;
 
             if ctrl && let Some(pos) = plot_ui.pointer_coordinate() {
                 set_play_position = Some(pos.x);
@@ -597,6 +600,18 @@ impl App {
 
                                 );
 
+                                let cancel_button_radius = 10.0;
+
+                                if let Some(PlotPoint {x, y}) = plot_ui.pointer_coordinate() {
+                                    if (x - rect_x_max).abs() < cancel_button_radius && (y - rect_y_max).abs() < cancel_button_radius {
+                                        set_mouse_cursor = true;
+
+                                    }
+
+                                }
+
+                                plot_ui.points(Points::new("消去按钮", [rect_x_max, rect_y_max]).color(Color32::RED).radius(cancel_button_radius as f32).shape(Cross),);
+
                                 if self.cached_notes.configuring == Some(*id) {
                                     let mut y_offset = -rect_height;
                                     let rect_y_min = rect_y_min + rect_height * 0.75;
@@ -686,6 +701,7 @@ impl App {
                 chosen_note,
                 set_play_position,
                 set_note_full,
+                set_mouse_cursor,
             }
         });
 
@@ -694,6 +710,7 @@ impl App {
             chosen_note: Option<(usize, String, f64)>,
             set_play_position: Option<f64>,
             set_note_full: Option<(usize, bool)>,
+            set_mouse_cursor: bool,
         }
 
         self.cached_notes.configuring = if self.show_beat_notes { configuration.inner.editing_beat_id } else { None };
@@ -713,6 +730,13 @@ impl App {
                     b.full = value;
                 }
             }
+        }
+
+
+        if configuration.inner.set_mouse_cursor {
+            ui.ctx().output_mut(|output| {
+                output.cursor_icon = CursorIcon::PointingHand;
+            });
         }
 
     }
