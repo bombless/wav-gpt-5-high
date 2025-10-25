@@ -133,9 +133,9 @@ impl PlaybackTrack {
     fn label(&self) -> &str {
         match self {
             PlaybackTrack::Max => "最大值（红线）",
-            PlaybackTrack::Sample1 => "采样频率 #1",
-            PlaybackTrack::Sample2 => "采样频率 #2",
-            PlaybackTrack::Sample3 => "采样频率 #3",
+            PlaybackTrack::Sample1 => "采样音轨 #1",
+            PlaybackTrack::Sample2 => "采样音轨 #2",
+            PlaybackTrack::Sample3 => "采样音轨 #3",
             PlaybackTrack::Original => "原音",
             PlaybackTrack::BeatNotes => "节拍音符",
         }
@@ -163,6 +163,7 @@ struct App {
     show_beat_lines: bool,
     beats_per_bar: usize,
     show_beat_notes: bool,  // 是否显示节拍音符标注
+    show_dismiss_beat_notes: bool,  // 是否显示节拍音符消除按钮
 
     selected_track: PlaybackTrack,
     stream: Option<OutputStream>,
@@ -229,6 +230,7 @@ impl App {
             show_beat_lines: false, // 默认不显示节拍线
             beats_per_bar,
             show_beat_notes: true,  // 默认显示节拍音符
+            show_dismiss_beat_notes: false,  // 默认不显示节拍音符取消按钮
             selected_track,
             stream: None,
             handle: None,
@@ -434,7 +436,7 @@ impl App {
                 }
             }
 
-            // 绘制三个采样频率
+            // 绘制三个采样音轨
             if self.show_sampled_freqs {
                 for i in 0..3 {
                     let points: Vec<[f64; 2]> = self.sampled_track.iter()
@@ -448,8 +450,7 @@ impl App {
                         _ => (1.5, Color32::from_rgb(147, 51, 234)),
                     };
 
-                    let line = Line::new("show_sampled_freqs", PlotPoints::from_iter(points))
-                        .name(format!("采样频率 #{}", i + 1))
+                    let line = Line::new(format!("采样音轨 #{}", i + 1), PlotPoints::from_iter(points))
                         .color(color)
                         .width(width);
                     plot_ui.line(line);
@@ -601,7 +602,7 @@ impl App {
 
                                 );
 
-                                if size_factor > 3.0 {
+                                if self.show_dismiss_beat_notes {
                                     let cancel_button_radius = 10.0;
 
                                     if let Some(PlotPoint {x, y}) = plot_ui.pointer_coordinate() {
@@ -887,20 +888,25 @@ impl eframe::App for App {
 
         egui::TopBottomPanel::top("top").show(ctx, |ui| {
             ui.horizontal_wrapped(|ui| {
-                ui.checkbox(&mut self.show_pie_chart, "显示频率图");
+                ui.checkbox(&mut self.show_pie_chart, "频率图");
                 ui.separator();
-                ui.checkbox(&mut self.show_note_lines, "显示十二平均律标线");
+                ui.checkbox(&mut self.show_note_lines, "十二平均律标线");
                 ui.separator();
-                ui.checkbox(&mut self.show_sampled_freqs, "显示采样频率");
+                ui.checkbox(&mut self.show_sampled_freqs, "采样音轨");
                 ui.separator();
 
                 // 节拍控制
-                ui.checkbox(&mut self.show_beat_lines, "显示节拍线");
+                ui.checkbox(&mut self.show_beat_lines, "节拍线");
                 ui.separator();
-                ui.checkbox(&mut self.show_beat_notes, "显示节拍音符");
-                let bpm = self.bpm;
-                let beats_per_bar = self.beats_per_bar;
+                ui.checkbox(&mut self.show_beat_notes, "节拍音符");
+                if self.show_beat_notes {
+                    ui.checkbox(&mut self.show_dismiss_beat_notes, "音符取消按钮");
+                } else {
+                    self.show_dismiss_beat_notes = false;
+                }
                 if self.show_beat_lines || self.show_beat_notes {
+                    let bpm = self.bpm;
+                    let beats_per_bar = self.beats_per_bar;
                     ui.separator();
                     ui.label("BPM:");
                     ui.add(egui::DragValue::new(&mut self.bpm)
@@ -917,10 +923,9 @@ impl eframe::App for App {
                             ui.selectable_value(&mut self.beats_per_bar, 5, "5/4");
                             ui.selectable_value(&mut self.beats_per_bar, 6, "6/4");
                         });
-                }
-
-                if bpm != self.bpm || beats_per_bar != self.beats_per_bar {
-                    self.save_config();
+                    if bpm != self.bpm || beats_per_bar != self.beats_per_bar {
+                        self.save_config();
+                    }
                 }
 
             });
