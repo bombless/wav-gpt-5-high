@@ -391,13 +391,14 @@ impl App {
 
 
 
-            let mut editing_beat_id = self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
+            let editing_beat_id = &self.cached_notes.configuring; // 显示哪一个小节里的音符备选列表
             let mut chosen_note = None; // 在音符备选列表中选中哪一个音符
             let mut set_play_position = None;
             let mut set_note_full = None;
             let mut set_mouse_cursor = false;
+            let mut click_type = if mouse_click { ClickType::Miss } else { ClickType::Nope };
 
-            if ctrl && let Some(pos) = plot_ui.pointer_coordinate() {
+            if ctrl && mouse_click && let Some(pos) = plot_ui.pointer_coordinate() {
                 set_play_position = Some(pos.x);
             }
 
@@ -483,7 +484,6 @@ impl App {
                 let end_beat = (bounds.max()[0] / beat_duration).ceil() as i32;
 
                 let click_pos = if mouse_click { plot_ui.pointer_coordinate() } else { None };
-                let mut miss_click = true;
 
                 for beat_num in start_beat..=end_beat {
                     if beat_num < 0 {
@@ -560,8 +560,7 @@ impl App {
 
                                 if let Some(PlotPoint { x, y }) = click_pos {
                                     if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min && y <= rect_y_max && editing_beat_id.is_none() {
-                                        editing_beat_id = Some(*id);
-                                        miss_click = false;
+                                        click_type = ClickType::EditNote(*id);
                                     }
                                 }
 
@@ -612,14 +611,14 @@ impl App {
 
                                 plot_ui.points(Points::new("消去按钮", [rect_x_max, rect_y_max]).color(Color32::RED).radius(cancel_button_radius as f32).shape(Cross),);
 
-                                if self.cached_notes.configuring == Some(*id) {
+                                if *editing_beat_id == Some(*id) {
                                     let mut y_offset = -rect_height;
                                     let rect_y_min = rect_y_min + rect_height * 0.75;
                                     for (name, freq, _) in candidates {
                                         y_offset -= rect_height * 0.3;
                                         if let Some(PlotPoint { x, y }) = click_pos {
                                             if x >= rect_x_min && x <= rect_x_max && y >= rect_y_min + y_offset && y <= rect_y_max + y_offset {
-                                                chosen_note = Some((*id, name.clone(), *freq))
+                                                chosen_note = Some((*id, name.clone(), *freq));
                                             }
                                         }
                                         let rectangle = Polygon::new("音符备选框", PlotPoints::from(vec![
@@ -671,11 +670,6 @@ impl App {
 
                 }
 
-
-
-                if mouse_click && miss_click && self.cached_notes.configuring.is_some() {
-                    editing_beat_id = None;
-                }
             }
 
             // 播放位置竖线
@@ -697,7 +691,7 @@ impl App {
                 );
             }
             Configuration {
-                editing_beat_id,
+                click_type,
                 chosen_note,
                 set_play_position,
                 set_note_full,
@@ -706,14 +700,19 @@ impl App {
         });
 
         struct Configuration {
-            editing_beat_id: Option<usize>,
+            click_type: ClickType,
             chosen_note: Option<(usize, String, f64)>,
             set_play_position: Option<f64>,
             set_note_full: Option<(usize, bool)>,
             set_mouse_cursor: bool,
         }
 
-        self.cached_notes.configuring = if self.show_beat_notes { configuration.inner.editing_beat_id } else { None };
+        enum ClickType {
+            Nope,
+            Miss,
+            EditNote(usize),
+        }
+
         if let Some((id, name, freq)) = configuration.inner.chosen_note {
             for b in &mut self.cached_notes.track {
                 if b.id == id {
@@ -732,11 +731,20 @@ impl App {
             }
         }
 
-
         if configuration.inner.set_mouse_cursor {
             ui.ctx().output_mut(|output| {
                 output.cursor_icon = CursorIcon::PointingHand;
             });
+        }
+
+        match configuration.inner.click_type {
+            ClickType::EditNote(id) => {
+                self.cached_notes.configuring = Some(id);
+            }
+            ClickType::Miss => {
+                self.cached_notes.configuring = None;
+            }
+            _ => ()
         }
 
     }
